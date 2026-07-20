@@ -1,4 +1,12 @@
 #include "MyMesh.h"
+#include "RoomAuth.h"
+
+static_assert(static_cast<uint8_t>(room_server::LoginPermission::Guest) == PERM_ACL_GUEST,
+              "room login guest permission must match the ACL role");
+static_assert(static_cast<uint8_t>(room_server::LoginPermission::ReadWrite) == PERM_ACL_READ_WRITE,
+              "room login read/write permission must match the ACL role");
+static_assert(static_cast<uint8_t>(room_server::LoginPermission::Admin) == PERM_ACL_ADMIN,
+              "room login admin permission must match the ACL role");
 
 #ifdef WITH_POTA_GATEWAY
 #include "pota_spotter.h"
@@ -350,18 +358,14 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
       }
     }
     if (client == NULL) {
-      uint8_t perm;
-      if (strcmp((char *)&data[8], _prefs.password) == 0) { // check for valid admin password
-        perm = PERM_ACL_ADMIN;
-      } else if (_prefs.guest_password[0] != 0 &&
-                 strcmp((char *)&data[8], _prefs.guest_password) == 0) {   // empty guest password is not a match
-        perm = PERM_ACL_READ_WRITE;
-      } else if (_prefs.allow_read_only) {
-        perm = PERM_ACL_GUEST;
-      } else {
+      const auto login_permission = room_server::resolveLoginPermission((char *)&data[8], _prefs.password,
+                                                                        _prefs.guest_password,
+                                                                        _prefs.allow_read_only);
+      if (login_permission == room_server::LoginPermission::Rejected) {
         MESH_DEBUG_PRINTLN("Incorrect room password");
         return; // no response. Client will timeout
       }
+      uint8_t perm = static_cast<uint8_t>(login_permission);
 
       client = acl.putClient(sender, 0);  // add to known clients (if not already known)
       if (sender_timestamp <= client->last_timestamp) {
