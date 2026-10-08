@@ -80,11 +80,11 @@ Read-only / wrong-password visitors cannot post. Guests with no room password ar
 
 The radio comes up first. Wi-Fi is non-blocking.
 
-- If saved credentials work, serial shows `[POTA] Wi-Fi <ip>` then `[PNP] portal http://<ip>/`. The Heltec OLED shows that DHCP address (and `192.168.4.1` while the first-setup AP is up). Open **`http://<that-ip>/`** on the same Wi-Fi (port 80) to set the ParksnPeaks user ID + API key. That page does **not** change Wi-Fi, so it will not hang the radio or USB serial. WWFF/SOTA spotting stays **off** until both look valid. Enter `OFF` in the key field to disable. A blank key on save keeps the stored key.
+- If saved credentials work, serial shows `[POTA] Wi-Fi <ip>` then `[PNP] portal http://<ip>/`. The Heltec OLED shows that DHCP address (and `192.168.4.1` while the first-setup AP is up). Open **`http://<that-ip>/`** on the same Wi-Fi (port 80) to set the ParksnPeaks user ID + API key. The page shows whether a key is **set**, never the key itself, and does **not** change Wi-Fi, so it will not hang the radio or USB serial. WWFF/SOTA spotting stays **off** until both look valid. Enter `OFF` in the key field to disable. A blank key on save keeps the stored key.
 - If not, after about **25 seconds** the Heltec opens AP **`MeshCore-POTA-Gateway`**. Join it, open **`http://192.168.4.1`**, pick the field hotspot (phone tethering is fine), optionally fill ParksnPeaks, save, then leave that AP so the Heltec can join the hotspot. The SoftAP stops when STA is up. Cellular data on the phone must stay on. TLS connects by hostname `api.pota.app` (CloudFront SNI). Connecting by raw IP fails.
 - `pota` on serial reports `WiFi <ip> q=0 busy=0 pnp=on|off`, or `portal 192.168.4.1`, or `WiFi down`.
 
-Spots queue until Wi-Fi is up (one-deep: a newer `SPOT` replaces an older one still waiting). HTTPS does not run inside the LoRa receive callback.
+Spots queue until Wi-Fi is up (up to 6 waiting: a newer `SPOT` drops the oldest only when the queue is full, with a serial log line). HTTPS does not run inside the LoRa receive callback.
 
 Re-open the portal later by clearing saved Wi-Fi (erase NVS / `erase` then reflash identity if you also want a new Room ID — `erase` wipes prefs; use only if you mean it).
 
@@ -126,6 +126,7 @@ The gateway drops a line **before** HTTPS when any of these fail. The text still
 | Mode | 2–8 letters or digits (`SSB`, `CW`, `FT8`) |
 | Duplicate | Same program, callsign, reference, frequency, and mode inside 5 minutes |
 | Per callsign | 3 queued spots per activator in any 10 minutes |
+| Per node | 3 queued spots per logged-in room node in any 10 minutes |
 | Whole gateway | 20 queued spots in any hour (POTA, WWFF, and SOTA share this cap) |
 | Block list | Admin `pota block CALL`. `W1AW` also matches `W1AW/P` and `KH6/W1AW`. Up to 16 callsigns, kept in flash across reboot. USB serial or an admin login; the open Wi-Fi page cannot edit it. |
 

@@ -70,7 +70,7 @@ void MyMesh::storePost(const mesh::Identity &author, const char *postData) {
   MESH_DEBUG_PRINTLN("room.post: next_post_idx=%d num_posted=%d push scheduled", next_post_idx, _num_posted);
 
 #ifdef WITH_POTA_GATEWAY
-  PotaSpotter::processMessage(nullptr, postData);
+  PotaSpotter::processMessage(nullptr, postData, author.pub_key, PUB_KEY_SIZE);
 #endif
 }
 

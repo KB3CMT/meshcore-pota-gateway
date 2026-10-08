@@ -19,14 +19,16 @@
  *
  * Before queueing, drops spots that fail call/ref/freq/mode shape,
  * hit the local block list, repeat inside 5 minutes, exceed 3 spots
- * per activator callsign per 10 minutes, or exceed 20 spots per hour.
+ * per activator callsign per 10 minutes, exceed 3 spots per logged-in
+ * room node per 10 minutes, or exceed 20 spots per hour.
  */
 class PotaSpotter {
 public:
     static bool looksLikeSpot(const char* message);
     static void initWiFi();
     static void handleLoop();
-    static bool processMessage(const char* senderCall, const char* message);
+    static bool processMessage(const char* senderCall, const char* message,
+                               const uint8_t* nodePubKey = nullptr, unsigned nodePubLen = 0);
     static void handleAdmin(const char* args, char* reply, unsigned replyLen);
     static void formatStatus(char* buf, unsigned bufLen);
     static bool staIsUp();

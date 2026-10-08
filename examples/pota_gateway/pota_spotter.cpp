@@ -23,6 +23,7 @@
 #define PNP_HOST  "parksnpeaks.org"
 #define PNP_PATH  "/api/SPOT"
 #define PNP_KEY_MIN 8
+#define POTA_QUEUE_LEN 6
 
 enum SpotProgram : uint8_t {
     PROG_POTA = POTA_PROG_POTA,
@@ -271,12 +272,23 @@ static bool pnpEnabled() {
     return pnpUserLooksValid(pnpUser) && pnpKeyLooksValid(pnpKey);
 }
 
+static void pnpForgetPortalKey() {
+    if (!wmPnpKey) return;
+    char* v = (char*)wmPnpKey->getValue();
+    if (v) {
+        size_t n = strlen(v);
+        if (n) memset(v, 0, n);
+    }
+    wmPnpKey->setValue("", (int)sizeof(pnpKey) - 1);
+}
+
 static void pnpClear() {
     pnpUser[0] = 0;
     pnpKey[0] = 0;
     pnpStore.begin("pnp", false);
     pnpStore.clear();
     pnpStore.end();
+    pnpForgetPortalKey();
     logf("[PNP] disabled (no API key)");
 }
 
@@ -304,6 +316,7 @@ static void pnpSave(const char* user, const char* key) {
     pnpStore.putString("user", pnpUser);
     pnpStore.putString("key", pnpKey);
     pnpStore.end();
+    pnpForgetPortalKey();
     logf("[PNP] saved — WWFF/SOTA spots will POST to parksnpeaks.org as %s\n", pnpUser);
 }
 
@@ -317,25 +330,20 @@ static void applyPnpForm(const char* user, const char* key) {
 
     if (keyMeansOff(key)) {
         pnpClear();
-        return;
-    }
-    if (key[0] == 0) {
+    } else if (key[0] == 0) {
         if (pnpEnabled() && pnpUserLooksValid(user) && strcasecmp(user, pnpUser) != 0) {
             pnpSave(user, pnpKey);
         } else {
             logf("[PNP] key unchanged; still %s", pnpEnabled() ? "on" : "off");
         }
-        return;
-    }
-    if (!pnpKeyLooksValid(key)) {
+    } else if (!pnpKeyLooksValid(key)) {
         logf("[PNP] API key rejected (need 8+ printable characters); PnP stays off");
-        return;
-    }
-    if (!pnpUserLooksValid(user)) {
+    } else if (!pnpUserLooksValid(user)) {
         logf("[PNP] user ID rejected (use your ParksnPeaks callsign); PnP stays off");
-        return;
+    } else {
+        pnpSave(user, key);
     }
-    pnpSave(user, key);
+    pnpForgetPortalKey();
 }
 
 static void onPortalSave() {
@@ -344,24 +352,27 @@ static void onPortalSave() {
 }
 
 static void handlePnpRoot() {
-    char page[1400];
+    char page[1500];
     String ip = WiFi.localIP().toString();
     snprintf(page, sizeof(page),
              "<!DOCTYPE html><html><head><meta name=viewport content='width=device-width,initial-scale=1'>"
              "<title>MeshCore POTA gateway</title></head><body>"
              "<h1>MeshCore POTA gateway</h1>"
-             "<p>DHCP <b>%s</b><br>POTA: api.pota.app<br>ParksnPeaks: <b>%s</b> user=%s</p>"
+             "<p>DHCP <b>%s</b><br>POTA: api.pota.app<br>ParksnPeaks: <b>%s</b> user=%s<br>API key: <b>%s</b></p>"
              "<h2>ParksnPeaks API key</h2>"
-             "<form method=post>"
+             "<form method=post autocomplete=off>"
              "<p>User ID<br><input name=user value='%s' maxlength=15></p>"
-             "<p>API key<br><input name=key type=password maxlength=47></p>"
+             "<p>API key (leave blank to keep)<br>"
+             "<input name=key type=password maxlength=47 value='' autocomplete=off></p>"
              "<button type=submit>Save</button>"
              "</form>"
-             "<p>Blank key keeps the stored key. Type OFF to disable. This page does not change Wi-Fi.</p>"
+             "<p>Blank key keeps the stored key. Type OFF to disable. This page does not change Wi-Fi "
+             "and never shows the stored key.</p>"
              "</body></html>",
              ip.c_str(),
              pnpEnabled() ? "ON" : "OFF",
              pnpEnabled() ? pnpUser : "-",
+             pnpKeyLooksValid(pnpKey) ? "set" : "not set",
              pnpUser[0] ? pnpUser : "");
     pnpHttp.send(200, "text/html", page);
     logf("[PNP] config page served http://%s/", ip.c_str());
@@ -536,6 +547,18 @@ static void waitForWifi(TickType_t maxWait) {
     }
 }
 
+static bool enqueueSpot(const Pending& slot) {
+    if (!spotQueue) return false;
+    if (xQueueSend(spotQueue, &slot, 0) == pdTRUE) return true;
+    Pending dropped;
+    if (xQueueReceive(spotQueue, &dropped, 0) == pdTRUE) {
+        logf("[POTA] queue full, dropped oldest %s %s", dropped.activator, dropped.park);
+    }
+    if (xQueueSend(spotQueue, &slot, 0) == pdTRUE) return true;
+    logf("[POTA] queue full, dropped %s %s", slot.activator, slot.park);
+    return false;
+}
+
 static void httpTask(void*) {
     Pending spot;
     for (;;) {
@@ -544,12 +567,6 @@ static void httpTask(void*) {
 
         int attempts = 0;
         for (;;) {
-            Pending newer;
-            if (xQueueReceive(spotQueue, &newer, 0) == pdTRUE) {
-                spot = newer;
-                attempts = 0;
-            }
-
             waitForWifi(pdMS_TO_TICKS(15000));
             if (WiFi.status() != WL_CONNECTED) {
                 logf("[POTA] waiting for Wi-Fi");
@@ -669,7 +686,7 @@ void PotaSpotter::initWiFi() {
     WiFi.begin();
 
     if (!spotQueue) {
-        spotQueue = xQueueCreate(1, sizeof(Pending));
+        spotQueue = xQueueCreate(POTA_QUEUE_LEN, sizeof(Pending));
     }
     if (!httpTaskHandle && spotQueue) {
         xTaskCreatePinnedToCore(httpTask, "potaHttp", 12288, nullptr, 1, &httpTaskHandle, 0);
@@ -717,7 +734,8 @@ void PotaSpotter::handleLoop() {
     }
 }
 
-bool PotaSpotter::processMessage(const char* senderCall, const char* message) {
+bool PotaSpotter::processMessage(const char* senderCall, const char* message,
+                                 const uint8_t* nodePubKey, unsigned nodePubLen) {
     if (!looksLikeSpot(message)) return false;
 
     const char* p = nullptr;
@@ -803,18 +821,23 @@ bool PotaSpotter::processMessage(const char* senderCall, const char* message) {
         return false;
     }
 
+    char node[POTA_NODE_ID_LEN];
+    potaNodeFromPub(node, sizeof(node), nodePubKey, nodePubLen);
+
     uint32_t now = (uint32_t)millis();
     potaGuardNoteTime(&spotGuard, now);
-    int limit = potaGuardLimit(&spotGuard, slot.program, slot.activator, slot.park, slot.freq, slot.mode, now);
+    int limit = potaGuardLimit(&spotGuard, slot.program, slot.activator, slot.park, slot.freq, slot.mode,
+                               node, now);
     if (limit != POTA_LIMIT_OK) {
         const char* why = (limit == POTA_LIMIT_DUP) ? "duplicate" :
-                          (limit == POTA_LIMIT_CALL) ? "call-rate" : "hourly";
+                          (limit == POTA_LIMIT_CALL) ? "call-rate" :
+                          (limit == POTA_LIMIT_NODE) ? "node-rate" : "hourly";
         logf("[POTA] rejected %s %s %s", why, slot.activator, slot.park);
         return false;
     }
 
-    potaGuardRemember(&spotGuard, slot.program, slot.activator, slot.park, slot.freq, slot.mode, now);
-    xQueueOverwrite(spotQueue, &slot);
+    if (!enqueueSpot(slot)) return false;
+    potaGuardRemember(&spotGuard, slot.program, slot.activator, slot.park, slot.freq, slot.mode, node, now);
     logf("[%s] Queued %s %s %s %s\n",
                   slot.program == PROG_POTA ? "POTA" : "PNP",
                   slot.activator, slot.park, slot.freq, slot.mode);

@@ -13,10 +13,10 @@ static void expect(int cond, const char* msg) {
 }
 
 static void remember(PotaGuard* g, uint8_t program, const char* call, const char* ref,
-                     const char* freq, const char* mode, uint32_t now) {
+                     const char* freq, const char* mode, uint32_t now, const char* node = "") {
     potaGuardNoteTime(g, now);
-    expect(potaGuardLimit(g, program, call, ref, freq, mode, now) == POTA_LIMIT_OK, "remember precondition");
-    potaGuardRemember(g, program, call, ref, freq, mode, now);
+    expect(potaGuardLimit(g, program, call, ref, freq, mode, node, now) == POTA_LIMIT_OK, "remember precondition");
+    potaGuardRemember(g, program, call, ref, freq, mode, node, now);
 }
 
 int main() {
@@ -85,11 +85,11 @@ int main() {
     memset(&g, 0, sizeof(g));
     remember(&g, POTA_PROG_POTA, "W1AW", "US-0001", "14285", "SSB", 1000);
     potaGuardNoteTime(&g, 2000);
-    expect(potaGuardLimit(&g, POTA_PROG_POTA, "W1AW", "US-0001", "14285", "SSB", 2000) == POTA_LIMIT_DUP,
+    expect(potaGuardLimit(&g, POTA_PROG_POTA, "W1AW", "US-0001", "14285", "SSB", "", 2000) == POTA_LIMIT_DUP,
            "dup inside 5 min");
     potaGuardNoteTime(&g, 1000 + POTA_GUARD_DUP_MS);
-    expect(potaGuardLimit(&g, POTA_PROG_POTA, "W1AW", "US-0001", "14285", "SSB", 1000 + POTA_GUARD_DUP_MS) ==
-               POTA_LIMIT_OK,
+    expect(potaGuardLimit(&g, POTA_PROG_POTA, "W1AW", "US-0001", "14285", "SSB", "",
+                          1000 + POTA_GUARD_DUP_MS) == POTA_LIMIT_OK,
            "dup expired");
 
     memset(&g, 0, sizeof(g));
@@ -97,11 +97,11 @@ int main() {
     remember(&g, POTA_PROG_POTA, "W1AW", "US-0002", "14285", "SSB", 1000);
     remember(&g, POTA_PROG_POTA, "W1AW", "US-0003", "7030", "CW", 2000);
     potaGuardNoteTime(&g, 3000);
-    expect(potaGuardLimit(&g, POTA_PROG_POTA, "W1AW", "US-0004", "14074", "FT8", 3000) == POTA_LIMIT_CALL,
+    expect(potaGuardLimit(&g, POTA_PROG_POTA, "W1AW", "US-0004", "14074", "FT8", "", 3000) == POTA_LIMIT_CALL,
            "4th in 10 min");
     uint32_t later = POTA_GUARD_CALL_MS;
     potaGuardNoteTime(&g, later);
-    expect(potaGuardLimit(&g, POTA_PROG_POTA, "W1AW", "US-0004", "14074", "FT8", later) == POTA_LIMIT_OK,
+    expect(potaGuardLimit(&g, POTA_PROG_POTA, "W1AW", "US-0004", "14074", "FT8", "", later) == POTA_LIMIT_OK,
            "call window slid");
 
     memset(&g, 0, sizeof(g));
@@ -112,11 +112,11 @@ int main() {
         remember(&g, POTA_PROG_POTA, call, ref, "14285", "SSB", (uint32_t)(i * 1000));
     }
     potaGuardNoteTime(&g, 30000);
-    expect(potaGuardLimit(&g, POTA_PROG_POTA, "N0CALL", "US-9999", "14285", "SSB", 30000) == POTA_LIMIT_HOUR,
+    expect(potaGuardLimit(&g, POTA_PROG_POTA, "N0CALL", "US-9999", "14285", "SSB", "", 30000) == POTA_LIMIT_HOUR,
            "21st in the hour");
     uint32_t hour = POTA_GUARD_HOUR_MS;
     potaGuardNoteTime(&g, hour);
-    expect(potaGuardLimit(&g, POTA_PROG_POTA, "N0CALL", "US-9999", "14285", "SSB", hour) == POTA_LIMIT_OK,
+    expect(potaGuardLimit(&g, POTA_PROG_POTA, "N0CALL", "US-9999", "14285", "SSB", "", hour) == POTA_LIMIT_OK,
            "hour window slid");
 
     memset(&g, 0, sizeof(g));
@@ -124,6 +124,43 @@ int main() {
     g.lastMs = 100;
     potaGuardNoteTime(&g, 10);
     expect(g.count == 0, "millis wrap clears history");
+
+    char nodeId[POTA_NODE_ID_LEN];
+    uint8_t pubA[8] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF};
+    uint8_t pubB[8] = {0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10};
+    potaNodeFromPub(nodeId, sizeof(nodeId), pubA, sizeof(pubA));
+    expect(strcmp(nodeId, "0123456789ABCDEF") == 0, "node hex");
+    char nodeB[POTA_NODE_ID_LEN];
+    potaNodeFromPub(nodeB, sizeof(nodeB), pubB, sizeof(pubB));
+    expect(strcmp(nodeB, "FEDCBA9876543210") == 0, "other node hex");
+    potaNodeFromPub(nodeId, sizeof(nodeId), 0, 0);
+    expect(nodeId[0] == 0, "empty node");
+
+    memset(&g, 0, sizeof(g));
+    remember(&g, POTA_PROG_POTA, "W1AW", "US-0001", "14285", "SSB", 0, "NODEA");
+    remember(&g, POTA_PROG_POTA, "K1ABC", "US-0002", "7030", "CW", 1000, "NODEA");
+    remember(&g, POTA_PROG_POTA, "N0CALL", "US-0003", "14074", "FT8", 2000, "NODEA");
+    potaGuardNoteTime(&g, 3000);
+    expect(potaGuardLimit(&g, POTA_PROG_POTA, "W2XYZ", "US-0004", "146520", "FM", "NODEA", 3000) ==
+               POTA_LIMIT_NODE,
+           "same node rotating callsigns");
+    expect(potaGuardLimit(&g, POTA_PROG_POTA, "W2XYZ", "US-0004", "146520", "FM", "NODEB", 3000) ==
+               POTA_LIMIT_OK,
+           "other node still allowed");
+    uint32_t nodeLater = POTA_GUARD_CALL_MS;
+    potaGuardNoteTime(&g, nodeLater);
+    expect(potaGuardLimit(&g, POTA_PROG_POTA, "W2XYZ", "US-0004", "146520", "FM", "NODEA", nodeLater) ==
+               POTA_LIMIT_OK,
+           "node window slid");
+
+    memset(&g, 0, sizeof(g));
+    remember(&g, POTA_PROG_POTA, "W1AW", "US-0001", "14285", "SSB", 0, "NODEA");
+    remember(&g, POTA_PROG_POTA, "W1AW", "US-0002", "7030", "CW", 1000, "NODEB");
+    remember(&g, POTA_PROG_POTA, "W1AW", "US-0003", "14074", "FT8", 2000, "NODEA");
+    potaGuardNoteTime(&g, 3000);
+    expect(potaGuardLimit(&g, POTA_PROG_POTA, "W1AW", "US-0004", "146520", "FM", "NODEB", 3000) ==
+               POTA_LIMIT_CALL,
+           "call cap still shared across nodes");
 
     if (fails) {
         printf("%d failed\n", fails);
