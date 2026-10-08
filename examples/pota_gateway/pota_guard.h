@@ -22,10 +22,12 @@ enum {
     POTA_LIMIT_OK = 0,
     POTA_LIMIT_DUP = 1,
     POTA_LIMIT_CALL = 2,
-    POTA_LIMIT_HOUR = 3
+    POTA_LIMIT_HOUR = 3,
+    POTA_LIMIT_NODE = 4
 };
 
-/* 3 spots per activator callsign per 10 minutes, 20 spots per hour. */
+/* 3 spots per activator callsign per 10 minutes, 3 per logged-in node per
+ * 10 minutes, 20 spots per hour. Node id is hex of the first 8 pubkey bytes. */
 #define POTA_GUARD_CALL_MAX 3
 #define POTA_GUARD_CALL_MS (10UL * 60UL * 1000UL)
 #define POTA_GUARD_HOUR_MAX 20
@@ -33,12 +35,15 @@ enum {
 #define POTA_GUARD_DUP_MS (5UL * 60UL * 1000UL)
 #define POTA_GUARD_HIST 20
 #define POTA_BLOCK_MAX 16
+#define POTA_NODE_ID_BYTES 8
+#define POTA_NODE_ID_LEN (POTA_NODE_ID_BYTES * 2 + 1)
 
 typedef struct PotaGuardSpot {
     char call[16];
     char ref[20];
     char freq[16];
     char mode[12];
+    char node[POTA_NODE_ID_LEN];
     uint8_t program;
     uint32_t ms;
 } PotaGuardSpot;
@@ -65,6 +70,21 @@ static inline void potaCopy(char* dest, size_t destLen, const char* src) {
         i++;
     }
     dest[i] = 0;
+}
+
+static inline void potaNodeFromPub(char* dest, size_t destLen, const uint8_t* pub, size_t pubLen) {
+    if (!dest || destLen == 0) return;
+    dest[0] = 0;
+    if (!pub || pubLen == 0) return;
+    size_t n = pubLen;
+    if (n > POTA_NODE_ID_BYTES) n = POTA_NODE_ID_BYTES;
+    if (destLen < n * 2 + 1) n = (destLen - 1) / 2;
+    static const char hex[] = "0123456789ABCDEF";
+    for (size_t i = 0; i < n; i++) {
+        dest[i * 2] = hex[pub[i] >> 4];
+        dest[i * 2 + 1] = hex[pub[i] & 0x0F];
+    }
+    dest[n * 2] = 0;
 }
 
 static inline int potaCallOk(const char* s) {
@@ -301,15 +321,21 @@ static inline uint8_t potaHistIndex(const PotaGuard* g, uint8_t k) {
 }
 
 static inline int potaGuardLimit(const PotaGuard* g, uint8_t program, const char* call,
-                                 const char* ref, const char* freq, const char* mode, uint32_t now) {
+                                 const char* ref, const char* freq, const char* mode,
+                                 const char* node, uint32_t now) {
     if (!g) return POTA_LIMIT_OK;
     int callN = 0;
+    int nodeN = 0;
     int hourN = 0;
     for (uint8_t k = 0; k < g->count; k++) {
         const PotaGuardSpot* s = &g->hist[potaHistIndex(g, k)];
         if (!potaFresh(now, s->ms, POTA_GUARD_HOUR_MS)) continue;
         hourN++;
         if (strcmp(s->call, call) == 0 && potaFresh(now, s->ms, POTA_GUARD_CALL_MS)) callN++;
+        if (node && node[0] && s->node[0] && strcmp(s->node, node) == 0 &&
+            potaFresh(now, s->ms, POTA_GUARD_CALL_MS)) {
+            nodeN++;
+        }
         if (s->program == program && strcmp(s->call, call) == 0 && strcmp(s->ref, ref) == 0 &&
             strcmp(s->freq, freq) == 0 && strcmp(s->mode, mode) == 0 &&
             potaFresh(now, s->ms, POTA_GUARD_DUP_MS)) {
@@ -317,12 +343,13 @@ static inline int potaGuardLimit(const PotaGuard* g, uint8_t program, const char
         }
     }
     if (callN >= POTA_GUARD_CALL_MAX) return POTA_LIMIT_CALL;
+    if (node && node[0] && nodeN >= POTA_GUARD_CALL_MAX) return POTA_LIMIT_NODE;
     if (hourN >= POTA_GUARD_HOUR_MAX) return POTA_LIMIT_HOUR;
     return POTA_LIMIT_OK;
 }
 
 static inline void potaGuardRemember(PotaGuard* g, uint8_t program, const char* call, const char* ref,
-                                    const char* freq, const char* mode, uint32_t now) {
+                                    const char* freq, const char* mode, const char* node, uint32_t now) {
     if (!g) return;
     potaGuardNoteTime(g, now);
     PotaGuardSpot* s = &g->hist[g->next];
@@ -330,6 +357,7 @@ static inline void potaGuardRemember(PotaGuard* g, uint8_t program, const char* 
     potaCopy(s->ref, sizeof(s->ref), ref);
     potaCopy(s->freq, sizeof(s->freq), freq);
     potaCopy(s->mode, sizeof(s->mode), mode);
+    potaCopy(s->node, sizeof(s->node), node);
     s->program = program;
     s->ms = now;
     g->next = (uint8_t)((g->next + 1) % POTA_GUARD_HIST);

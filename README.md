@@ -72,12 +72,13 @@ Checks run **before** a spot is queued for HTTPS. The line still stays in the ro
 | Mode | 2–8 letters or digits (`SSB`, `CW`, `FT8`) |
 | Duplicate | Same program, callsign, reference, frequency, and mode inside 5 minutes |
 | Per activator | 3 queued spots in any 10 minutes |
+| Per node | 3 queued spots in any 10 minutes from the same room login (mesh public key) |
 | Whole gateway | 20 queued spots in any hour (POTA, WWFF, and SOTA share this cap) |
 | Block list | Admin `pota block CALL`. Up to 16 callsigns, kept across reboot. `W1AW` also matches `W1AW/P` and `KH6/W1AW` |
 
-One room login can still rotate callsigns until the gateway hits 20 spots in an hour. Watch [pota.app](https://pota.app) for spots you do not recognize.
+Two operators on different logged-in nodes each get their own 3-spot / 10-minute node cap. Rotating activator callsigns from one login does not bypass it. The per-activator cap still applies across nodes.
 
-The queue is one-deep while Wi-Fi is down: a newer `SPOT` replaces an older one still waiting. TLS runs off the LoRa loop, so the mesh keeps running during the POST.
+While Wi-Fi is down the outbound queue holds 6 spots. A newer `SPOT` displaces the oldest only when that bound is hit (serial `[POTA] queue full, dropped oldest …`). TLS runs off the LoRa loop, so the mesh keeps running during the POST.
 
 ## Way of service
 
