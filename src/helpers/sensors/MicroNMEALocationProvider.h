@@ -263,7 +263,16 @@ public :
         return alt;
     }
     long satellitesCount() override { return nmea.getNumSatellites(); }
-    bool isValid() override { return nmea.isValid(); }
+    bool isValid() override {
+        // MicroNMEA can report a fix whose position fields did not parse, for
+        // example a checksum-valid sentence with a field missing. Do not call
+        // a position no receiver can report a fix.
+        if (!nmea.isValid()) return false;
+        const long lat = nmea.getLatitude();
+        const long lon = nmea.getLongitude();
+        return lat >= -90000000L && lat <= 90000000L
+            && lon >= -180000000L && lon <= 180000000L;
+    }
 
     // Until a sentence carrying a date has been parsed, MicroNMEA::clear()
     // leaves year/month/day at 0 and hour/minute/second at 99. Handing those
