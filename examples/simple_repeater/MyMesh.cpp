@@ -153,11 +153,14 @@ uint8_t MyMesh::handleLoginReq(const mesh::Identity& sender, const uint8_t* secr
   return 13;  // reply length
 }
 
-uint8_t MyMesh::handleAnonRegionsReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data) {
+uint8_t MyMesh::handleAnonRegionsReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data, size_t data_len) {
   if (anon_limiter.allow(rtc_clock.getCurrentTime())) {
     // request data has: {reply-path-len}{reply-path}
+    if (data_len < 1) return 0;
     reply_path_len = *data++;
     if (!mesh::Packet::isValidPathLen(reply_path_len)) return 0;  // reject - bad encoding
+    // reject if the declared path overruns the received payload
+    if (1 + (size_t)(reply_path_len & 63) * ((reply_path_len >> 6) + 1) > data_len) return 0;
 
     mesh::Packet::writePath(reply_path, data, reply_path_len);
     // data += (uint8_t)reply_path_len * reply_path_hash_size;
@@ -171,11 +174,14 @@ uint8_t MyMesh::handleAnonRegionsReq(const mesh::Identity& sender, uint32_t send
   return 0;
 }
 
-uint8_t MyMesh::handleAnonOwnerReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data) {
+uint8_t MyMesh::handleAnonOwnerReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data, size_t data_len) {
   if (anon_limiter.allow(rtc_clock.getCurrentTime())) {
     // request data has: {reply-path-len}{reply-path}
+    if (data_len < 1) return 0;
     reply_path_len = *data++;
     if (!mesh::Packet::isValidPathLen(reply_path_len)) return 0;  // reject - bad encoding
+    // reject if the declared path overruns the received payload
+    if (1 + (size_t)(reply_path_len & 63) * ((reply_path_len >> 6) + 1) > data_len) return 0;
 
     mesh::Packet::writePath(reply_path, data, reply_path_len);
     // data += (uint8_t)reply_path_len * reply_path_hash_size;
@@ -190,11 +196,14 @@ uint8_t MyMesh::handleAnonOwnerReq(const mesh::Identity& sender, uint32_t sender
   return 0;
 }
 
-uint8_t MyMesh::handleAnonClockReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data) {
+uint8_t MyMesh::handleAnonClockReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data, size_t data_len) {
   if (anon_limiter.allow(rtc_clock.getCurrentTime())) {
     // request data has: {reply-path-len}{reply-path}
+    if (data_len < 1) return 0;
     reply_path_len = *data++;
     if (!mesh::Packet::isValidPathLen(reply_path_len)) return 0;  // reject - bad encoding
+    // reject if the declared path overruns the received payload
+    if (1 + (size_t)(reply_path_len & 63) * ((reply_path_len >> 6) + 1) > data_len) return 0;
 
     mesh::Packet::writePath(reply_path, data, reply_path_len);
     // data += (uint8_t)reply_path_len * reply_path_hash_size;
@@ -231,7 +240,7 @@ int MyMesh::handleRequest(ClientInfo *sender, uint32_t sender_timestamp, uint8_t
     stats.n_packets_recv = radio_driver.getPacketsRecv();
     stats.n_packets_sent = radio_driver.getPacketsSent();
     stats.total_air_time_secs = getTotalAirTime() / 1000;
-    stats.total_up_time_secs = uptime_millis / 1000;
+    stats.total_up_time_secs = uptime.getMillis() / 1000;
     stats.n_sent_flood = getNumSentFlood();
     stats.n_sent_direct = getNumSentDirect();
     stats.n_recv_flood = getNumRecvFlood();
@@ -590,12 +599,12 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
     reply_path_len = 0xFF;
     if (data[4] == 0 || data[4] >= ' ') {   // is password, ie. a login request
       reply_len = handleLoginReq(sender, secret, timestamp, &data[4], packet->isRouteFlood());
-    } else if (data[4] == ANON_REQ_TYPE_REGIONS && packet->isRouteDirect()) {
-      reply_len = handleAnonRegionsReq(sender, timestamp, &data[5]);
-    } else if (data[4] == ANON_REQ_TYPE_OWNER && packet->isRouteDirect()) {
-      reply_len = handleAnonOwnerReq(sender, timestamp, &data[5]);
-    } else if (data[4] == ANON_REQ_TYPE_BASIC && packet->isRouteDirect()) {
-      reply_len = handleAnonClockReq(sender, timestamp, &data[5]);
+    } else if (data[4] == ANON_REQ_TYPE_REGIONS && packet->isRouteDirect() && len > 5) {
+      reply_len = handleAnonRegionsReq(sender, timestamp, &data[5], len - 5);
+    } else if (data[4] == ANON_REQ_TYPE_OWNER && packet->isRouteDirect() && len > 5) {
+      reply_len = handleAnonOwnerReq(sender, timestamp, &data[5], len - 5);
+    } else if (data[4] == ANON_REQ_TYPE_BASIC && packet->isRouteDirect() && len > 5) {
+      reply_len = handleAnonClockReq(sender, timestamp, &data[5], len - 5);
     } else {
       reply_len = 0;  // unknown/invalid request type
     }
@@ -742,6 +751,14 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       uint8_t temp[166];
       char *command = (char *)&data[5];
       char *reply = (char *)&temp[5];
+
+      // Commands such as `setperm ... 0` can compact the ACL array, invalidating `client`.
+      // Preserve everything needed to route the reply before dispatching the command.
+      mesh::Identity requester_id = client->id;
+      uint8_t requester_out_path_len = client->out_path_len;
+      uint8_t requester_out_path[MAX_PATH_SIZE];
+      memcpy(requester_out_path, client->out_path, MAX_PATH_SIZE);
+
       if (is_retry) {
         *reply = 0;
       } else {
@@ -757,12 +774,12 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
         memcpy(temp, &timestamp, 4);        // mostly an extra blob to help make packet_hash unique
         temp[4] = (TXT_TYPE_CLI_DATA << 2); // NOTE: legacy was: TXT_TYPE_PLAIN
 
-        auto reply = createDatagram(PAYLOAD_TYPE_TXT_MSG, client->id, secret, temp, 5 + text_len);
+        auto reply = createDatagram(PAYLOAD_TYPE_TXT_MSG, requester_id, secret, temp, 5 + text_len);
         if (reply) {
-          if (client->out_path_len == OUT_PATH_UNKNOWN) {
+          if (requester_out_path_len == OUT_PATH_UNKNOWN) {
             sendFloodReply(reply, CLI_REPLY_DELAY_MILLIS, packet->getPathHashSize());
           } else {
-            sendDirect(reply, client->out_path, client->out_path_len, CLI_REPLY_DELAY_MILLIS);
+            sendDirect(reply, requester_out_path, requester_out_path_len, CLI_REPLY_DELAY_MILLIS);
           }
         }
       }
@@ -882,8 +899,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
       , bridge(&_prefs, _mgr, &rtc)
 #endif
 {
-  last_millis = 0;
-  uptime_millis = 0;
   next_local_advert = next_flood_advert = 0;
   dirty_contacts_expiry = 0;
   set_radio_at = revert_radio_at = 0;
@@ -1334,9 +1349,7 @@ void MyMesh::loop() {
   }
 
   // update uptime
-  uint32_t now = millis();
-  uptime_millis += now - last_millis;
-  last_millis = now;
+  uptime.update();
 }
 
 // To check if there is pending work

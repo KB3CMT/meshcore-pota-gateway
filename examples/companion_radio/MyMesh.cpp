@@ -245,18 +245,22 @@ void MyMesh::addToOfflineQueue(const uint8_t frame[], int len) {
   }
 }
 
-int MyMesh::getFromOfflineQueue(uint8_t frame[]) {
+int MyMesh::peekOfflineQueue(uint8_t frame[]) {
   if (offline_queue_len > 0) {         // check offline queue
-    size_t len = offline_queue[0].len; // take from top of queue
+    size_t len = offline_queue[0].len; // copy from top of queue, but leave it there
     memcpy(frame, offline_queue[0].buf, len);
+    return len;
+  }
+  return 0; // queue is empty
+}
 
+void MyMesh::popOfflineQueue() {
+  if (offline_queue_len > 0) {
     offline_queue_len--;
     for (int i = 0; i < offline_queue_len; i++) { // delete top item from queue
       offline_queue[i] = offline_queue[i + 1];
     }
-    return len;
   }
-  return 0; // queue is empty
 }
 
 float MyMesh::getAirtimeBudgetFactor() const {
@@ -485,7 +489,12 @@ bool MyMesh::filterRecvFloodPacket(mesh::Packet* packet) {
 }
 
 bool MyMesh::allowPacketForward(const mesh::Packet* packet) {
-  return _prefs.isRepeatEn();
+  return isClientRepeatActive();
+}
+
+// prefs.json is shared with repeater firmware; check the applied freq since CLI "set radio" waits for reboot
+bool MyMesh::isClientRepeatActive() const {
+  return _prefs.isRepeatEn() && isValidClientRepeatFreq(_active_freq_khz);
 }
 
 void MyMesh::sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis) {
@@ -733,8 +742,10 @@ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, 
     out_frame[i++] = 0; // reserved
     memcpy(&out_frame[i], contact.id.pub_key, 6);
     i += 6; // pub_key_prefix
-    memcpy(&out_frame[i], &data[4], len - 4);
-    i += (len - 4);
+    int copy_len = len - 4;
+    if (copy_len > MAX_FRAME_SIZE - i) copy_len = MAX_FRAME_SIZE - i;
+    memcpy(&out_frame[i], &data[4], copy_len);
+    i += copy_len;
     _serial->writeFrame(out_frame, i);
   } else if (len > 4 && tag == pending_telemetry) {  // check for matching response tag
     pending_telemetry = 0;
@@ -744,8 +755,10 @@ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, 
     out_frame[i++] = 0; // reserved
     memcpy(&out_frame[i], contact.id.pub_key, 6);
     i += 6; // pub_key_prefix
-    memcpy(&out_frame[i], &data[4], len - 4);
-    i += (len - 4);
+    int copy_len = len - 4;
+    if (copy_len > MAX_FRAME_SIZE - i) copy_len = MAX_FRAME_SIZE - i;
+    memcpy(&out_frame[i], &data[4], copy_len);
+    i += copy_len;
     _serial->writeFrame(out_frame, i);
   } else if (len > 4 && tag == pending_req) {  // check for matching response tag
     pending_req = 0;
@@ -755,8 +768,10 @@ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, 
     out_frame[i++] = 0; // reserved
     memcpy(&out_frame[i], &tag, 4);   // app needs to match this to RESP_CODE_SENT.tag
     i += 4;
-    memcpy(&out_frame[i], &data[4], len - 4);
-    i += (len - 4);
+    int copy_len = len - 4;
+    if (copy_len > MAX_FRAME_SIZE - i) copy_len = MAX_FRAME_SIZE - i;
+    memcpy(&out_frame[i], &data[4], copy_len);
+    i += copy_len;
     _serial->writeFrame(out_frame, i);
   } else {
     bool handled;
@@ -1003,6 +1018,7 @@ void MyMesh::begin() {
   _store->loadChannels(this);
 
   radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
+  _active_freq_khz = (uint32_t)lroundf(_prefs.freq * 1000);
   radio_driver.setTxPower(_prefs.tx_power_dbm);
   radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
 
@@ -1070,7 +1086,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     i += 40;
     StrHelper::strzcpy((char *)&out_frame[i], FIRMWARE_VERSION, 20);
     i += 20;
-    out_frame[i++] = _prefs.isRepeatEn() ? 1 : 0;   // v9+
+    out_frame[i++] = isClientRepeatActive() ? 1 : 0;   // v9+
     out_frame[i++] = _prefs.path_hash_mode;  // v10+
     _serial->writeFrame(out_frame, i);
   } else if (cmd_frame[0] == CMD_APP_START &&
@@ -1414,9 +1430,16 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
   } else if (cmd_frame[0] == CMD_SYNC_NEXT_MESSAGE) {
     int out_len;
-    if ((out_len = getFromOfflineQueue(out_frame)) > 0) {
-      _serial->writeFrame(out_frame, out_len);
-      if (_listener) _listener->onQueueSizeChanged(offline_queue_len);
+    if ((out_len = peekOfflineQueue(out_frame)) > 0) {
+      // The frame stays queued until a transport has taken it. A write that
+      // puts nothing on the wire (BLE/WiFi send queue full, serial link not
+      // accepting) used to lose the message for good; now the client simply
+      // asks again. writeFrame() returns 0 only in that case, see
+      // BaseSerialInterface, so any other result consumes the frame.
+      if (_serial->writeFrame(out_frame, out_len) != 0) {
+        popOfflineQueue();
+        if (_listener) _listener->onQueueSizeChanged(offline_queue_len);
+      }
     } else {
       out_frame[0] = RESP_CODE_NO_MORE_MESSAGES;
       _serial->writeFrame(out_frame, 1);
@@ -1448,6 +1471,7 @@ void MyMesh::handleCmdFrame(size_t len) {
       savePrefs();
 
       radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
+      _active_freq_khz = freq;
       MESH_DEBUG_PRINTLN("OK: CMD_SET_RADIO_PARAMS: f=%d, bw=%d, sf=%d, cr=%d", freq, bw, (uint32_t)sf,
                          (uint32_t)cr);
 

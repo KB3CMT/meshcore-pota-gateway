@@ -222,7 +222,8 @@ private:
   void writeContactRespFrame(uint8_t code, const ContactInfo &contact);
   void updateContactFromFrame(ContactInfo &contact, uint32_t& last_mod, const uint8_t *frame, int len);
   void addToOfflineQueue(const uint8_t frame[], int len);
-  int getFromOfflineQueue(uint8_t frame[]);
+  int peekOfflineQueue(uint8_t frame[]);   // copies the oldest frame, leaves it queued
+  void popOfflineQueue();                   // discards the oldest frame
   int getBlobByKey(const uint8_t key[], int key_len, uint8_t dest_buf[]) override { 
     return _store->getBlobByKey(key, key_len, dest_buf);
   }
@@ -234,6 +235,7 @@ private:
   bool handleCommand(const char* text, uint32_t sender_timestamp, char* reply);
   void checkSerialInterface();
   bool isValidClientRepeatFreq(uint32_t f) const;
+  bool isClientRepeatActive() const;
 
   // helpers, short-cuts
   void saveChannels() { _store->saveChannels(this); }
@@ -253,6 +255,7 @@ private:
   uint32_t _most_recent_lastmod;
   uint32_t _active_ble_pin;
   bool _iter_started;
+  uint32_t _active_freq_khz = 0;  // frequency last applied to the radio
   bool _cli_rescue;
   bool send_unscoped;   // force un-scoped flood (instead of using send_scope)
   char cli_command[80];
