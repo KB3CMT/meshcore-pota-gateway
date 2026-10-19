@@ -21,6 +21,18 @@ public:
       : _year(year), _month(month), _day(day), _hour(hour),
         _minute(minute), _second(second) {}
 
+  bool isValid() const {
+    if (_year < 2000 || _year > 2099) return false;
+    if (_month < 1 || _month > 12) return false;
+    static const uint8_t month_days[] = {31, 28, 31, 30, 31, 30,
+                                         31, 31, 30, 31, 30, 31};
+    uint8_t dim = month_days[_month - 1];
+    if (_month == 2 && leap(_year)) dim = 29;
+    if (_day < 1 || _day > dim) return false;
+    if (_hour > 23 || _minute > 59 || _second > 59) return false;
+    return true;
+  }
+
   uint32_t unixtime() const {
     uint32_t days = 0;
     for (uint16_t year = 1970; year < _year; ++year)
