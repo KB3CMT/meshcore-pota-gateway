@@ -463,6 +463,8 @@ void UITask::shutdown(bool restart){
 
   #endif // PIN_BUZZER
 
+  if (_shutdown_handler) _shutdown_handler->onBeforeShutdown();
+
   if (restart) {
     _board->reboot();
   } else {

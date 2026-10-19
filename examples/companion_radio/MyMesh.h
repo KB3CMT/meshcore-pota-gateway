@@ -87,7 +87,15 @@ struct AdvertPath {
   uint8_t path[MAX_PATH_SIZE];
 };
 
-class MyMesh : public BaseChatMesh, public DataStoreHost {
+// Independent of Listener: UI holds a ShutdownHandler* so it can flush lazy
+// contacts/prefs before powerOff/reboot without MyMesh knowing about UI.
+class ShutdownHandler {
+public:
+  virtual void onBeforeShutdown() = 0;
+  virtual ~ShutdownHandler() {}
+};
+
+class MyMesh : public BaseChatMesh, public DataStoreHost, public ShutdownHandler {
 public:
   class Listener {
     public:
@@ -199,6 +207,14 @@ public:
     _prefs.node_lon = sensors.node_lon;
     _store->savePrefs(_prefs);
     _prefs.clearDirty();
+  }
+
+  void onBeforeShutdown() override {
+    if (dirty_contacts_expiry) {
+      saveContacts();
+      dirty_contacts_expiry = 0;
+    }
+    savePrefs();
   }
 
 #if ENV_INCLUDE_GPS == 1
