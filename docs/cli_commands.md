@@ -890,12 +890,15 @@ region save
 
 #### View all regions
 **Usage:** 
-- `region list <filter>`
+- `region list <filter> [start]`
 
 **Serial Only:** Yes
 
 **Parameters:**
 - `filter`: `allowed`|`denied`
+- `start`: Optional index of the first matching name to return (defaults to 0)
+
+**Note:** A reply that cannot fit the rest of the names ends with `... next:<index>`. Repeat the command with that index.
 
 **Note:** Requires firmware 1.12+
 
@@ -904,8 +907,11 @@ region save
 #### Dump all defined regions and flood permissions
 **Usage:** 
 - `region`
+- `region page <offset>`
 
 **Serial Only:** For firmware older than 1.12.0
+
+**Note:** The tree is returned 140 bytes at a time. A reply that continues ends with `... next:<offset>`. `region page <offset>` returns the following bytes.
 
 ---
 
@@ -1048,7 +1054,9 @@ region save
 **Usage:** `sensor list [start]`
 
 **Parameters:**
-- `start`: Optional starting index (defaults to 0)
+- `start`: Optional starting index (defaults to 0). Must be a number from 0 through the setting count. A value past the end, or any other token, returns `Err - bad start`.
+
+**Note:** The reply is capped at 160 bytes. When another page remains, the reply ends with `... next:<index>`.
 
 **Note:** Output format: `<var_name>=<value>\n`
 

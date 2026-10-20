@@ -2,6 +2,9 @@
 #include <Mesh.h>
 
 #include "MyMesh.h"
+#if defined(ESP32)
+  #include <helpers/esp32/SPIFFSMount.h>
+#endif
 #ifdef WITH_POTA_GATEWAY
 #include "pota_spotter.h"
 #endif
@@ -63,7 +66,7 @@ void setup() {
   IdentityStore store(LittleFS, "/identity");
   store.begin();
 #elif defined(ESP32)
-  SPIFFS.begin(true);
+  mountSPIFFS();
   fs = &SPIFFS;
   IdentityStore store(SPIFFS, "/identity");
 #else

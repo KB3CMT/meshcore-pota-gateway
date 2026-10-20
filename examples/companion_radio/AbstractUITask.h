@@ -14,6 +14,10 @@
 #include "NodePrefs.h"
 #include "MyMesh.h"
 
+#ifndef AUTO_SHUTDOWN_LOW_READINGS
+  #define AUTO_SHUTDOWN_LOW_READINGS 3
+#endif
+
 enum class UIEventType {
     none,
     contactMessage,
@@ -27,11 +31,13 @@ class AbstractUITask : public MyMesh::Listener {
 protected:
   mesh::MainBoard* _board;
   MultiSerialInterface* _interfaceManager;
+  ShutdownHandler* _shutdown_handler = nullptr;
 
   AbstractUITask(mesh::MainBoard* board, MultiSerialInterface* interfaceManager) : _board(board), _interfaceManager(interfaceManager) {
   }
 
 public:
+  void setShutdownHandler(ShutdownHandler* h) { _shutdown_handler = h; }
   bool hasConnection() const { return _interfaceManager->isConnected(); }
   uint16_t getBattMilliVolts() const { return _board->getBattMilliVolts(); }
   bool isBluetoothEnabled() const { return _interfaceManager->isBluetoothEnabled(); }

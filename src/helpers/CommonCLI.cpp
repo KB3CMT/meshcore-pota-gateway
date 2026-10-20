@@ -20,11 +20,7 @@ static uint32_t _atoi(const char* sp) {
 }
 
 static bool isValidName(const char *n) {
-  while (*n) {
-    if (*n == '[' || *n == ']' || *n == '\\' || *n == ':' || *n == ',' || *n == '?' || *n == '*') return false;
-    n++;
-  }
-  return true;
+  return AdvertDataParser::isValidName(n);
 }
 
 void CommonCLI::loadPrefs(FILESYSTEM* fs) {
@@ -317,27 +313,50 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
         strcpy(reply, "can't find custom var");
       }
     } else if (memcmp(command, "sensor list", 11) == 0) {
+      const int reply_max = 160;
+      const int tail_reserve = 24;   // room for "\n... next:%d"
       char* dp = reply;
-      int start = 0;
       int end = _sensors->getNumSettings();
-      if (strlen(command) > 11) {
-        start = _atoi(command+12);
+      int start = 0;
+      bool bad_start = false;
+      if (command[11] == ' ') {
+        const char* arg = command + 12;
+        if (*arg == 0) {
+          bad_start = true;
+        } else {
+          for (const char* p = arg; *p; p++) {
+            if (*p < '0' || *p > '9') bad_start = true;
+          }
+          uint32_t parsed = _atoi(arg);
+          if (parsed > 100000u) bad_start = true;
+          start = (int)parsed;
+        }
+      } else if (command[11] != 0) {
+        bad_start = true;
       }
-      if (start >= end) {
+      if (bad_start || start < 0 || start > end) {
+        strcpy(reply, "Err - bad start");
+      } else if (start >= end) {
         strcpy(reply, "no custom var");
       } else {
-        sprintf(dp, "%d vars\n", end);
+        snprintf(dp, reply_max, "%d vars\n", end);
         dp = strchr(dp, 0);
         int i;
-        for (i = start; i < end && (dp-reply < 134); i++) {
-          sprintf(dp, "%s=%s\n",
+        for (i = start; i < end; i++) {
+          char line[96];
+          int wrote = snprintf(line, sizeof(line), "%s=%s\n",
             _sensors->getSettingName(i),
             _sensors->getSettingValue(i));
-          dp = strchr(dp, 0);
+          if (wrote < 0) break;
+          if (wrote >= (int)sizeof(line)) wrote = (int)sizeof(line) - 1;
+          if ((dp - reply) + wrote >= reply_max - tail_reserve) break;
+          memcpy(dp, line, wrote);
+          dp += wrote;
+          *dp = 0;
         }
         if (i < end) {
-          sprintf(dp, "... next:%d", i);
-        } else {
+          snprintf(dp, reply_max - (dp - reply), "... next:%d", i);
+        } else if (dp > reply) {
           *(dp-1) = 0; // remove last CR
         }
       }
@@ -487,7 +506,14 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
   const char* config = &command[4];
 
   if (memcmp(config, "allow.read.only ", 16) == 0) {
-    _prefs->allow_read_only = memcmp(&config[16], "on", 2) == 0;
+    if (strcmp(&config[16], "off") == 0) {
+      _prefs->allow_read_only = false;
+    } else if (strcmp(&config[16], "on") == 0) {
+      _prefs->allow_read_only = true;
+    } else {
+      strcpy(reply, "Error, on/off");
+      return;
+    }
     savePrefs();
     strcpy(reply, "OK");
   } else if (memcmp(config, "flood.advert.interval ", 22) == 0) {
@@ -536,7 +562,14 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       strcpy(reply, "Error, bad chars");
     }
   } else if (memcmp(config, "repeat ", 7) == 0) {
-    _prefs->disable_fwd = memcmp(&config[7], "off", 3) == 0;
+    if (strcmp(&config[7], "off") == 0) {
+      _prefs->disable_fwd = true;
+    } else if (strcmp(&config[7], "on") == 0) {
+      _prefs->disable_fwd = false;
+    } else {
+      strcpy(reply, "Error, on/off");
+      return;
+    }
     savePrefs();
     strcpy(reply, _prefs->disable_fwd ? "OK - repeat is now OFF" : "OK - repeat is now ON");
   } else if (memcmp(config, "lat ", 4) == 0) {
@@ -587,13 +620,13 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
   } else if (memcmp(config, "loop.detect ", 12) == 0) {
     config += 12;
     uint8_t mode;
-    if (memcmp(config, "off", 3) == 0) {
+    if (strcmp(config, "off") == 0) {
       mode = LOOP_DETECT_OFF;
-    } else if (memcmp(config, "minimal", 7) == 0) {
+    } else if (strcmp(config, "minimal") == 0) {
       mode = LOOP_DETECT_MINIMAL;
-    } else if (memcmp(config, "moderate", 8) == 0) {
+    } else if (strcmp(config, "moderate") == 0) {
       mode = LOOP_DETECT_MODERATE;
-    } else if (memcmp(config, "strict", 6) == 0) {
+    } else if (strcmp(config, "strict") == 0) {
       mode = LOOP_DETECT_STRICT;
     } else {
       mode = 0xFF;
@@ -610,7 +643,14 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     strcpy(reply, "OK - reboot to apply");
 #ifdef WITH_BRIDGE
   } else if (memcmp(config, "bridge.enabled ", 15) == 0) {
-    _prefs->bridge_enabled = memcmp(&config[15], "on", 2) == 0;
+    if (strcmp(&config[15], "off") == 0) {
+      _prefs->bridge_enabled = false;
+    } else if (strcmp(&config[15], "on") == 0) {
+      _prefs->bridge_enabled = true;
+    } else {
+      strcpy(reply, "Error, on/off");
+      return;
+    }
     _callbacks->setBridgeState(_prefs->bridge_enabled);
     savePrefs();
     strcpy(reply, "OK");
@@ -886,6 +926,24 @@ static bool processRegionDefSegment(RegionMap* map, char* tok, RegionEntry** cur
   return true;
 }
 
+static void writeRegionPage(RegionMap* map, int offset, char* reply) {
+  static char full[1200];
+  const int reply_max = 160;
+  size_t total = map->exportTo(full, sizeof(full));
+  bool cut = total + 1 >= sizeof(full);
+  if (offset < 0) offset = 0;
+  if ((size_t)offset > total) offset = (int)total;
+  int take = 0;
+  while (take < 140 && (size_t)(offset + take) < total) take++;
+  memcpy(reply, full + offset, take);
+  reply[take] = 0;
+  if ((size_t)(offset + take) < total) {
+    snprintf(reply + take, reply_max - take, "\n... next:%d", offset + take);
+  } else if (cut) {
+    snprintf(reply + take, reply_max - take, "\n... truncated");
+  }
+}
+
 void CommonCLI::handleRegionCmd(char* command, char* reply) {
   reply[0] = 0;
 
@@ -900,14 +958,20 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
     for (char* tok; (tok = takeToken(&payload)) != nullptr; ) {
       if (!processRegionDefSegment(_region_map, tok, &cursor, reply)) return;
     }
-    _region_map->exportTo(reply, 160);
+    writeRegionPage(_region_map, 0, reply);
     return;
   }
 
   const char* parts[4];
   int n = mesh::Utils::parseTextParts(command, parts, 4, ' ');
   if (n == 1) {
-    _region_map->exportTo(reply, 160);
+    writeRegionPage(_region_map, 0, reply);
+  } else if (n >= 2 && strcmp(parts[1], "page") == 0) {
+    if (n < 3) {
+      strcpy(reply, "Err - region page <offset>");
+    } else {
+      writeRegionPage(_region_map, atoi(parts[2]), reply);
+    }
   } else if (n >= 2 && strcmp(parts[1], "load") == 0) {
     _callbacks->startRegionsLoad();
   } else if (n >= 2 && strcmp(parts[1], "save") == 0) {
@@ -1017,7 +1081,20 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
       return;
     }
     
-    int len = _region_map->exportNamesTo(reply, 160, mask, invert);
+    int start = 0;
+    if (n >= 4) {
+      const char* arg = parts[3];
+      bool digits = arg[0] != 0;
+      for (const char* p = arg; *p; p++) {
+        if (*p < '0' || *p > '9') digits = false;
+      }
+      if (!digits) {
+        strcpy(reply, "Err - bad start");
+        return;
+      }
+      start = atoi(arg);
+    }
+    int len = _region_map->exportNamesTo(reply, 160, mask, invert, start, true);
     if (len == 0) {
       strcpy(reply, "-none-");
     }

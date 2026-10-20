@@ -1,4 +1,12 @@
 #include "MyMesh.h"
+#include "RoomAuth.h"
+
+static_assert(static_cast<uint8_t>(room_server::LoginPermission::Guest) == PERM_ACL_GUEST,
+              "room login guest permission must match the ACL role");
+static_assert(static_cast<uint8_t>(room_server::LoginPermission::ReadWrite) == PERM_ACL_READ_WRITE,
+              "room login read/write permission must match the ACL role");
+static_assert(static_cast<uint8_t>(room_server::LoginPermission::Admin) == PERM_ACL_ADMIN,
+              "room login admin permission must match the ACL role");
 
 #ifdef WITH_POTA_GATEWAY
 #include "pota_spotter.h"
@@ -171,7 +179,7 @@ int MyMesh::handleRequest(ClientInfo *sender, uint32_t sender_timestamp, uint8_t
     stats.n_packets_recv = radio_driver.getPacketsRecv();
     stats.n_packets_sent = radio_driver.getPacketsSent();
     stats.total_air_time_secs = getTotalAirTime() / 1000;
-    stats.total_up_time_secs = uptime_millis / 1000;
+    stats.total_up_time_secs = uptime.getMillis() / 1000;
     stats.n_sent_flood = getNumSentFlood();
     stats.n_sent_direct = getNumSentDirect();
     stats.n_recv_flood = getNumRecvFlood();
@@ -333,6 +341,7 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
                             uint8_t *data, size_t len) {
   if (packet->getPayloadType() == PAYLOAD_TYPE_ANON_REQ) { // received an initial request by a possible admin
                                                            // client (unknown at this stage)
+    if (len < 9) return;
     uint32_t sender_timestamp, sender_sync_since;
     memcpy(&sender_timestamp, data, 4);
     memcpy(&sender_sync_since, &data[4], 4); // sender's "sync messags SINCE x" timestamp
@@ -349,19 +358,14 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
       }
     }
     if (client == NULL) {
-      uint8_t perm;
-      if (strcmp((char *)&data[8], _prefs.password) == 0) { // check for valid admin password
-        perm = PERM_ACL_ADMIN;
-      } else {
-        if (strcmp((char *)&data[8], _prefs.guest_password) == 0) {   // check the room/public password
-          perm = PERM_ACL_READ_WRITE;
-        } else if (_prefs.allow_read_only) {
-          perm = PERM_ACL_GUEST;
-        } else {
-          MESH_DEBUG_PRINTLN("Incorrect room password");
-          return; // no response. Client will timeout
-        }
+      const auto login_permission = room_server::resolveLoginPermission((char *)&data[8], _prefs.password,
+                                                                        _prefs.guest_password,
+                                                                        _prefs.allow_read_only);
+      if (login_permission == room_server::LoginPermission::Rejected) {
+        MESH_DEBUG_PRINTLN("Incorrect room password");
+        return; // no response. Client will timeout
       }
+      uint8_t perm = static_cast<uint8_t>(login_permission);
 
       client = acl.putClient(sender, 0);  // add to known clients (if not already known)
       if (sender_timestamp <= client->last_timestamp) {
@@ -370,17 +374,30 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
       }
 
       MESH_DEBUG_PRINTLN("Login success!");
+      uint8_t existing = client->permissions & PERM_ACL_ROLE_MASK;
+      if (existing > perm) perm = existing;  // never demote (e.g. admin logging in with guest password)
+
       client->last_timestamp = sender_timestamp;
       client->extra.room.sync_since = sender_sync_since;
       client->extra.room.pending_ack = 0;
       client->extra.room.push_failures = 0;
 
       client->last_activity = getRTCClock()->getCurrentTime();
-      client->permissions &= ~0x03;
+      client->permissions &= ~PERM_ACL_ROLE_MASK;
       client->permissions |= perm;
       memcpy(client->shared_secret, secret, PUB_KEY_SIZE);
 
       dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
+    } else {
+      if (sender_timestamp <= client->last_timestamp) {
+        MESH_DEBUG_PRINTLN("possible replay attack!");
+        return;
+      }
+      client->last_timestamp = sender_timestamp;
+      client->extra.room.sync_since = sender_sync_since;
+      client->extra.room.pending_ack = 0;
+      client->extra.room.push_failures = 0;
+      client->last_activity = getRTCClock()->getCurrentTime();
     }
 
     if (packet->isRouteFlood()) {
@@ -485,9 +502,9 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
           send_ack = false; // and no ACK...  user shoudn't be sending these
         }
       } else { // TXT_TYPE_PLAIN
-        if ((client->permissions & PERM_ACL_ROLE_MASK) == PERM_ACL_GUEST) {
+        if ((client->permissions & PERM_ACL_ROLE_MASK) < PERM_ACL_READ_WRITE) {
           temp[5] = 0;      // no reply
-          send_ack = false; // no ACK
+          send_ack = false; // no ACK; GUEST and READ_ONLY cannot post
         } else {
           if (!is_retry) {
             addPost(client, (const char *)&data[5]);
@@ -546,7 +563,7 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
   } else if (type == PAYLOAD_TYPE_REQ && len >= 5) {
     uint32_t sender_timestamp;
     memcpy(&sender_timestamp, data, 4); // timestamp (by sender's RTC clock - which could be wrong)
-    if (sender_timestamp < client->last_timestamp) { // prevent replay attacks
+    if (sender_timestamp <= client->last_timestamp) { // prevent replay attacks (equal timestamp is not a retry)
       MESH_DEBUG_PRINTLN("onPeerDataRecv: possible replay attack detected");
     } else {
       client->last_timestamp = sender_timestamp;
@@ -642,8 +659,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
       _cli(board, rtc, sensors, region_map, acl, &_prefs, this),
       telemetry(MAX_PACKET_PAYLOAD - 4)
 {
-  last_millis = 0;
-  uptime_millis = 0;
   next_local_advert = next_flood_advert = 0;
   dirty_contacts_expiry = 0;
   _logging = false;
@@ -1089,7 +1104,5 @@ void MyMesh::loop() {
   // TODO: periodically check for OLD/inactive entries in known_clients[], and evict
 
   // update uptime
-  uint32_t now = millis();
-  uptime_millis += now - last_millis;
-  last_millis = now;
+  uptime.update();
 }

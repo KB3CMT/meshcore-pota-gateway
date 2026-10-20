@@ -32,6 +32,7 @@ static const uint8_t meshcore_logo [] PROGMEM = {
 void UITask::begin(NodePrefs* node_prefs, const char* build_date, const char* firmware_version) {
   _prevBtnState = HIGH;
   _auto_off = millis() + AUTO_OFF_MILLIS;
+  _started_at = millis();
   _node_prefs = node_prefs;
   _display->turnOn();
 
@@ -50,7 +51,7 @@ void UITask::begin(NodePrefs* node_prefs, const char* build_date, const char* fi
 
 void UITask::renderCurrScreen() {
   char tmp[80];
-  if (millis() < BOOT_SCREEN_MILLIS) { // boot screen
+  if (millis() < _started_at + BOOT_SCREEN_MILLIS) { // boot screen
     // meshcore logo
     _display->setColor(UIColor::corp_blue);
     int logoWidth = 128;

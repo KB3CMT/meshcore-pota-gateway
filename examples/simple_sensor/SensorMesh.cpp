@@ -374,6 +374,12 @@ uint8_t SensorMesh::handleLoginReq(const mesh::Identity& sender, const uint8_t* 
     #endif
       return 0;
     }
+    if (sender_timestamp <= client->last_timestamp) {
+      MESH_DEBUG_PRINTLN("Possible login replay attack!");
+      return 0;
+    }
+    client->last_timestamp = sender_timestamp;
+    client->last_activity = getRTCClock()->getCurrentTime();
   } else {
     if (strcmp((char *) data, _prefs.password) != 0) {  // check for valid admin password
     #if MESH_DEBUG
@@ -1029,6 +1035,10 @@ void SensorMesh::loop() {
 
   uint32_t curr = getRTCClock()->getCurrentTime();
   if (curr >= last_read_time + SENSOR_READ_INTERVAL_SECS) {
+    // Skip this cycle if TX just completed — the current spike sags battery
+    // voltage enough to falsely trigger low-battery alerts on weaker cells.
+    // The loop runs again in milliseconds, so the read is only deferred briefly.
+    if (!board.isBattReadSafe(millis())) return;
     telemetry.reset();
     telemetry.addVoltage(TELEM_CHANNEL_SELF, (float)board.getBattMilliVolts() / 1000.0f);
     // query other sensors -- target specific

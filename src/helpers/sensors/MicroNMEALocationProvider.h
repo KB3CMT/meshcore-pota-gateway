@@ -39,7 +39,17 @@
 #endif
 
 class MicroNMEALocationProvider : public LocationProvider {
-    char _nmeaBuffer[100];
+public:
+    // MicroNMEA never writes past the length it is given, but its fixed-width
+    // field skips can read a few bytes past the terminating NUL of a malformed
+    // sentence whose checksum still passes. The zeroed tail behind the length
+    // the library sees makes those reads land on NUL bytes, so the parser stops
+    // there instead of reading the members that follow the buffer.
+    static constexpr uint8_t NMEA_BUFFER_LEN = 100;
+    static constexpr size_t NMEA_BUFFER_GUARD = 16;
+
+private:
+    char _nmeaBuffer[NMEA_BUFFER_LEN + NMEA_BUFFER_GUARD] = {};
     MicroNMEA nmea;
     mesh::RTCClock* _clock;
     Stream* _gps_serial;
@@ -48,8 +58,17 @@ class MicroNMEALocationProvider : public LocationProvider {
     int _pin_reset;
     int _pin_en;
     unsigned long next_check = 0;
-    long time_valid = 0;
     unsigned long _last_time_sync = 0;
+    // The clock is set only from the time and date text of an RMC sentence
+    // that passed its checksum, once consecutive sentences agree with
+    // millis(). MicroNMEA's own date/time fields can still hold values from
+    // an earlier sentence when the latest one is malformed.
+    uint32_t _clock_sample = 0;      // UTC seconds from the last accepted RMC
+    uint32_t _clock_sample_ms = 0;   // millis() when that second was first seen
+    uint8_t _clock_samples = 0;      // consecutive samples that agreed
+    static const uint8_t CLOCK_SAMPLES_REQUIRED = 3;
+    static const uint32_t CLOCK_SAMPLE_MAX_AGE_MS = 2000;
+    static const int32_t CLOCK_SAMPLE_TOLERANCE_S = 2;
     static const unsigned long TIME_SYNC_INTERVAL = 1800000; // Re-sync every 30 minutes
 
 #ifdef GPS_L76K
@@ -88,9 +107,83 @@ class MicroNMEALocationProvider : public LocationProvider {
         }
     }
 
+    static bool isDigits(const char* s, int n) {
+        for (int i = 0; i < n; i++) {
+            if (s[i] < '0' || s[i] > '9') return false;
+        }
+        return true;
+    }
+
+    static uint8_t twoDigits(const char* s) { return (s[0] - '0') * 10 + (s[1] - '0'); }
+
+    static uint8_t daysInMonth(uint16_t year, uint8_t month) {
+        static const uint8_t days[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+        bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+        return month == 2 && leap ? 29 : days[month - 1];
+    }
+
+    // UTC seconds from the time and date fields of an RMC sentence, or 0 when
+    // the sentence does not carry a complete time, an 'A' (valid) status and a
+    // complete date. The checksum covers only what comes before the first
+    // '*', and the date is the last field used, so it must end before it.
+    static uint32_t rmcEpoch(const char* sentence) {
+        const char* star = strchr(sentence, '*');
+        const char* time = strchr(sentence, ',');
+        if (star == NULL || time == NULL) return 0;
+        time++;
+        const char* time_end = strchr(time, ',');
+        if (time_end == NULL || !isDigits(time, 6)) return 0;  // hhmmss
+        if (time_end - time > 6                                 // optional .s+
+            && (time[6] != '.' || time_end - time == 7 || !isDigits(time + 7, time_end - time - 7))) return 0;
+        const char* status = time_end + 1;
+        if (status[0] != 'A' || status[1] != ',') return 0;
+        const char* date = status + 2;
+        for (int field = 3; field <= 8; field++) {  // latitude .. course
+            date = strchr(date, ',');
+            if (date == NULL) return 0;
+            date++;
+        }
+        if (date + 6 > star || !isDigits(date, 6) || (date[6] != ',' && date[6] != '*')) return 0;  // ddmmyy
+
+        const uint8_t hour = twoDigits(time), minute = twoDigits(time + 2), second = twoDigits(time + 4);
+        const uint8_t day = twoDigits(date), month = twoDigits(date + 2);
+        const uint16_t year = 2000 + twoDigits(date + 4);
+        if (hour > 23 || minute > 59 || second > 59 || month < 1 || month > 12
+            || day < 1 || day > daysInMonth(year, month)) return 0;
+        return DateTime(year, month, day, hour, minute, second).unixtime();
+    }
+
+    // Count consecutive RMC samples whose seconds advance with millis(). A
+    // sentence without a usable time, or a repeat of the same second
+    // (receivers faster than 1 Hz), is ignored. A sample that disagrees by
+    // more than the tolerance (loop stalls, lost sentences) starts a new run.
+    void noteClockSample(uint32_t epoch, uint32_t now) {
+        if (epoch == 0) return;
+        if (_clock_samples > 0) {
+            const int32_t gps_s = (int32_t)(epoch - _clock_sample);
+            const int32_t wall_s = (int32_t)((now - _clock_sample_ms) / 1000);
+            const int32_t drift = gps_s - wall_s;
+            if (gps_s >= 0 && drift >= -CLOCK_SAMPLE_TOLERANCE_S && drift <= CLOCK_SAMPLE_TOLERANCE_S) {
+                if (gps_s == 0) return;
+                if (_clock_samples < CLOCK_SAMPLES_REQUIRED) _clock_samples++;
+                _clock_sample = epoch;
+                _clock_sample_ms = now;
+                return;
+            }
+        }
+        _clock_samples = 1;
+        _clock_sample = epoch;
+        _clock_sample_ms = now;
+    }
+
+    bool clockSampleReady() const {
+        return _clock_samples >= CLOCK_SAMPLES_REQUIRED
+            && (uint32_t)(millis() - _clock_sample_ms) <= CLOCK_SAMPLE_MAX_AGE_MS;
+    }
+
 public :
     MicroNMEALocationProvider(Stream& ser, mesh::RTCClock* clock = NULL, int pin_reset = GPS_RESET, int pin_en = GPS_EN,RefCountedDigitalPin* peripher_power=NULL) :
-    nmea(_nmeaBuffer, sizeof(_nmeaBuffer)), _clock(clock), _gps_serial(&ser), _peripher_power(peripher_power), _pin_reset(pin_reset), _pin_en(pin_en) {
+    nmea(_nmeaBuffer, NMEA_BUFFER_LEN), _clock(clock), _gps_serial(&ser), _peripher_power(peripher_power), _pin_reset(pin_reset), _pin_en(pin_en) {
         if (_pin_reset != -1) {
             pinMode(_pin_reset, OUTPUT);
             digitalWrite(_pin_reset, GPS_RESET_ACTIVE);
@@ -157,7 +250,11 @@ public :
         }
     }
 
-    void syncTime() override { nmea.clear(); LocationProvider::syncTime(); }
+    void syncTime() override {
+        nmea.clear();
+        _clock_samples = 0;
+        LocationProvider::syncTime();
+    }
     long getLatitude() override { return nmea.getLatitude(); }
     long getLongitude() override { return nmea.getLongitude(); }
     long getAltitude() override { 
@@ -166,10 +263,38 @@ public :
         return alt;
     }
     long satellitesCount() override { return nmea.getNumSatellites(); }
-    bool isValid() override { return nmea.isValid(); }
+    bool isValid() override {
+        // MicroNMEA can report a fix whose position fields did not parse, for
+        // example a checksum-valid sentence with a field missing. Do not call
+        // a position no receiver can report a fix.
+        if (!nmea.isValid()) return false;
+        const long lat = nmea.getLatitude();
+        const long lon = nmea.getLongitude();
+        return lat >= -90000000L && lat <= 90000000L
+            && lon >= -180000000L && lon <= 180000000L;
+    }
 
-    long getTimestamp() override { 
-        DateTime dt(nmea.getYear(), nmea.getMonth(),nmea.getDay(),nmea.getHour(),nmea.getMinute(),nmea.getSecond());
+    // Until a sentence carrying a date has been parsed, MicroNMEA::clear()
+    // leaves year/month/day at 0 and hour/minute/second at 99. Handing those
+    // to DateTime does not produce an obviously wrong value, it produces a
+    // plausible looking one: date2days(0,0,0) evaluates to -1, which wraps its
+    // uint16_t return to 65535, so unixtime() comes back as 2314303943, i.e.
+    // 3 May 2043. Report 0 instead, so a caller can tell there is no time yet.
+    uint32_t getTimestamp() override {
+        uint16_t year = nmea.getYear();
+        uint8_t month = nmea.getMonth();
+        uint8_t day = nmea.getDay();
+        uint8_t hour = nmea.getHour();
+        uint8_t minute = nmea.getMinute();
+        uint8_t second = nmea.getSecond();
+
+        if (year < 2000 || year > 2099) return 0;   // DateTime spans 2000..2099
+        if (month < 1 || month > 12) return 0;
+        if (day < 1 || day > 31) return 0;
+        if (hour > 23 || minute > 59 || second > 59) return 0;
+
+        DateTime dt(year, month, day, hour, minute, second);
+        if (!dt.isValid()) return 0;   // rejects impossible dates such as 31 February
         return dt.unixtime();
     } 
 
@@ -228,13 +353,14 @@ public :
                         _last_fix_ms = millis();
                         _fix_seen = true;
                     }
+                    if (strcmp(message_id, "RMC") == 0) {
+                        noteClockSample(rmcEpoch(nmea.getSentence()), millis());
+                    }
                 } else {
                     _nmea_checksum_bad++;
                 }
             }
         }
-
-        if (!isValid()) time_valid = 0;
 
         if ((long)(millis() - next_check) > 0) {
             next_check = millis() + 1000;
@@ -242,15 +368,12 @@ public :
             if (!_time_sync_needed && _clock != NULL && (millis() - _last_time_sync) > TIME_SYNC_INTERVAL) {
                 _time_sync_needed = true;
             }
-            if (_time_sync_needed && time_valid > 2) {
+            if (_time_sync_needed && clockSampleReady()) {
                 if (_clock != NULL) {
-                    _clock->setCurrentTime(getTimestamp());
+                    _clock->setCurrentTime(_clock_sample);
                     _time_sync_needed = false;
                     _last_time_sync = millis();
                 }
-            }
-            if (isValid()) {
-                time_valid ++;
             }
         }
     }
