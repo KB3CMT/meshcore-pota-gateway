@@ -100,7 +100,7 @@ Operate the LoRa side under the amateur rules that apply to you. The gateway's W
 
 ## Flash and first setup
 
-Published image: `v1.17.1+` on branch `build/pota-all` (`a852559f`).
+Published image: `v1.18.0+pota` on branch `cursor/pota-v1.18-ced6` (ported onto MeshCore v1.18.0).
 
 - Browser flasher, zip, and checklist: [getontheair.app/meshcore-pota](https://getontheair.app/meshcore-pota/)
 - Boards: Heltec V3, Heltec V4, Heltec V4 R8, XIAO ESP32-S3 + SX1262
@@ -137,7 +137,7 @@ Useful reports: a spot that should have been accepted and was not, a spot that s
 
 ## This repository
 
-This is KB3CMT's fork of [meshcore-dev/MeshCore](https://github.com/meshcore-dev/MeshCore), published from `build/pota-all`. Upstream MeshCore is the mesh protocol and the stock firmware: [docs.meshcore.io](https://docs.meshcore.io), clients at [meshcore.io](https://meshcore.io).
+This is KB3CMT's fork of [meshcore-dev/MeshCore](https://github.com/meshcore-dev/MeshCore), published from `build/pota-all` and ported onto MeshCore v1.18.0. Upstream MeshCore is the mesh protocol and the stock firmware: [docs.meshcore.io](https://docs.meshcore.io), clients at [meshcore.io](https://meshcore.io).
 
 | Topic | Where |
 |---|---|

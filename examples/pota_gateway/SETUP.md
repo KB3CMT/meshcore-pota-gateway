@@ -15,7 +15,7 @@ Use **one live gateway** on a mesh. A second flashed board is a spare, not a sec
 
 - Heltec WiFi LoRa 32 V3 (ESP32-S3 + SX1262)
 - USB cable and PlatformIO (`pio`) on the build machine
-- This tree: MeshCore v1.17.1 with `examples/pota_gateway/`
+- This tree: MeshCore v1.18.0+pota with `examples/pota_gateway/`
 - A phone or laptop for the Wi-Fi portal (`MeshCore-POTA-Gateway` / `192.168.4.1`)
 - A MeshCore client (official app + companion radio, or another mesh node) **or** USB serial for a dry run
 - The **same LoRa radio settings** as the rest of your mesh (frequency, bandwidth, spreading factor, coding rate)
@@ -29,7 +29,7 @@ Firmware compile defaults in this tree are **EU** (`869.618 MHz`, BW `62.5`, SF 
 From the MeshCore repo root, with the Heltec on USB:
 
 ```bash
-pio run -e Heltec_v3_room_server -t upload -t monitor
+pio run -e Heltec_v3_room_server_pota -t upload -t monitor
 ```
 
 Wait for a serial line like:
@@ -69,7 +69,7 @@ These are the only room items that matter. Defaults are compiled in; change them
 2. **Name** — `set name BSR-POTA` (or similar). Clients see this in the advert. Default is `Heltec Room`.
 3. **Room password** — `set guest.password …`. Operators use this to log in and post. Default `hello`.
 4. **Admin password** — `password …`. Remote CLI / admin login. Default `password`.
-5. **Repeat** — leave **off**. Stock room-server starts with forwarding disabled (`set repeat off`). This node is a BBS + internet gateway, not a repeater. Turning repeat on would rebroadcast other people’s floods and add airtime on a mesh that already has repeaters.
+5. **Repeat** — leave **off**. Stock room-server starts with forwarding disabled (`disable_fwd=1`). MeshCore v1.18 deprecated room `set repeat on` (it now replies `ERR - repeat now deprecated`). `get repeat` should stay `off`. This node is a BBS + internet gateway, not a repeater.
 6. **Location** (optional) — `set lat …` / `set lon …` if you want the advert to show a park or EOC grid.
 
 Read-only / wrong-password visitors cannot post. Guests with no room password are rejected unless you later `set allow.read.only on` (still cannot post spots).
@@ -166,7 +166,7 @@ Same queue and HTTP path as a live room post.
 - **The room is a destination**, not a hop. Login and posts are **encrypted to this node’s public key**. Neighbors may RF-hear the packets; they cannot decrypt them. Repeaters may forward those packets *toward this room* the same way they forward any other datagram. That is normal MeshCore, not a special POTA channel.
 - **Airtime.** A spot is one short text post plus ACKs, same as any other room message. Wi-Fi/TLS is off the LoRa core. The gateway advertises like any room (zero-hop on boot, flood advert on a long interval). That is the only extra RF besides spots.
 - **Wi-Fi on a Heltec V3** can slightly desense the SX1262 while the radio is transmitting on 2.4 GHz. Park the gateway at the internet edge (EOC, vehicle with a hotspot, house with Wi-Fi), not as the only RF path in the middle of the mesh.
-- **Do not enable `set repeat on`** on the POTA Heltec unless you have deliberately decided this board is *also* a repeater. Mixing “internet gateway” and “busy flood repeater” on one ESP32 with Wi-Fi up is how you disrupt daily operation.
+- **Do not enable repeat** on the POTA Heltec. Room `set repeat on` is deprecated in v1.18 (`ERR - repeat now deprecated`). Mixing “internet gateway” and “busy flood repeater” on one ESP32 with Wi-Fi up is how you disrupt daily operation.
 
 Normal room chat still works. POTA `SPOT` lines go to pota.app. WWFF/SOTA lines go to parksnpeaks.org only when `pnp=on`. Other posts stay in the BBS.
 
@@ -219,9 +219,9 @@ There is no mesh-wide election and no “first node to hear it wins.” Encrypti
 
 ## First-spot checklist
 
-1. Flash `Heltec_v3_room_server`, serial shows Room ID and `[POTA]`.
+1. Flash `Heltec_v3_room_server_pota`, serial shows Room ID and `[POTA]`.
 2. `set radio` to the club mesh; `reboot`.
-3. `set name`, `set guest.password`, `password` (admin); `set repeat off`; `advert`.
+3. `set name`, `set guest.password`, `password` (admin); confirm `get repeat` is `off`; `advert`.
 4. Phone joins `MeshCore-POTA-Gateway` if needed; `pota` shows an IP.
 5. USB: `room.post SPOT W1AW US-1234 14.285 SSB First spot` **or** log into the room from a client and post the same line.
 6. Serial `OK HTTP 200` and the spot on pota.app.

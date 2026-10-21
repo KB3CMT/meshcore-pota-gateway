@@ -476,7 +476,7 @@ static int postPota(const Pending& spot) {
     int bodyLen = (int)strlen(json);
     tls.printf("POST %s HTTP/1.1\r\n", POTA_PATH);
     tls.print("Host: " POTA_HOST "\r\n");
-    tls.print("User-Agent: MeshCore-POTA-Gateway/v1.17.1+\r\n");
+    tls.print("User-Agent: MeshCore-POTA-Gateway/v1.18.0+pota\r\n");
     tls.print("Content-Type: application/json\r\n");
     tls.printf("Content-Length: %d\r\n", bodyLen);
     tls.print("Connection: close\r\n\r\n");
@@ -524,7 +524,7 @@ static int postPnp(const Pending& spot) {
     int bodyLen = (int)strlen(json);
     http.printf("POST %s HTTP/1.1\r\n", PNP_PATH);
     http.print("Host: " PNP_HOST "\r\n");
-    http.print("User-Agent: MeshCore-POTA-Gateway/v1.17.1+\r\n");
+    http.print("User-Agent: MeshCore-POTA-Gateway/v1.18.0+pota\r\n");
     http.print("Content-Type: application/json\r\n");
     http.printf("Content-Length: %d\r\n", bodyLen);
     http.print("Connection: close\r\n\r\n");

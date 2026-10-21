@@ -5,7 +5,6 @@
 #if defined(ESP32)
   #include <helpers/esp32/SPIFFSMount.h>
 #endif
-
 #ifdef WITH_POTA_GATEWAY
 #include "pota_spotter.h"
 #endif

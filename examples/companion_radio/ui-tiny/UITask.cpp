@@ -780,6 +780,10 @@ void UITask::loop() {
 
 #ifdef AUTO_SHUTDOWN_MILLIVOLTS
   if (millis() > next_batt_chck) {
+    uint32_t now = millis();
+    if (!_board->isBattReadSafe(now)) {
+      next_batt_chck = now + POST_TX_BATT_SETTLE_MS + 50;
+    } else {
     _cached_batt_mv = getBattMilliVolts();
     if (_cached_batt_mv > 0 && _cached_batt_mv < AUTO_SHUTDOWN_MILLIVOLTS && !board.isExternalPowered()) {
       _low_batt_count++;
@@ -799,6 +803,7 @@ void UITask::loop() {
       _low_batt_count = 0;
     }
     next_batt_chck = millis() + 8000;
+    }
   }
 #else
   if (_display != NULL && _display->isOn() && millis() >= next_batt_chck) {

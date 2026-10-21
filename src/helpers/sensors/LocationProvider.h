@@ -23,6 +23,8 @@ public:
     // representable on targets where long is 32 bit signed.
     virtual uint32_t getTimestamp() = 0;
     virtual void sendSentence(const char * sentence);
+    virtual bool waitFor(const char* prefix, uint32_t timeout_ms) { return false; }
+    virtual void drain() { }
     virtual void reset() = 0;
     virtual void begin() = 0;
     virtual void stop() = 0;

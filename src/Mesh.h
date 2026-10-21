@@ -32,7 +32,7 @@ class Mesh : public Dispatcher {
   void removeSelfFromPath(Packet* packet);
   void routeDirectRecvAcks(Packet* packet, uint32_t delay_millis);
   //void routeRecvAcks(Packet* packet, uint32_t delay_millis);
-  DispatcherAction forwardMultipartDirect(Packet* pkt);
+  DispatcherAction forwardMultipartDirect(Packet* pkt, uint32_t delay_millis);
 
 protected:
   DispatcherAction onRecvPacket(Packet* pkt) override;
@@ -102,7 +102,7 @@ protected:
    * \param  flags       zero for now
    * \param  path_snrs   single byte SNR*4 for each hop in the path
    * \param  path_hashes hashes of each repeater in the path
-   * \param  path_len    byte length of path_hashes[]; SNR count is path_len >> (flags & 3)
+   * \param  path_len    length of the path_snrs[] and path_hashes[] arrays
   */
   virtual void onTraceRecv(Packet* packet, uint32_t tag, uint32_t auth_code, uint8_t flags, const uint8_t* path_snrs, const uint8_t* path_hashes, uint8_t path_len) { }
 

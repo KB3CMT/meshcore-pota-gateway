@@ -64,7 +64,6 @@ public:
   bool isBattReadSafe(uint32_t now_ms, uint32_t settle_ms = POST_TX_BATT_SETTLE_MS) const {
     return !_tx_active && (now_ms - _last_tx_complete_ms >= settle_ms);
   }
-
   virtual uint16_t getBattMilliVolts() = 0;
   virtual float getMCUTemperature() { return NAN; }
   virtual bool setAdcMultiplier(float multiplier) { return false; };

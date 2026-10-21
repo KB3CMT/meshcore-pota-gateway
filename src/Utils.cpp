@@ -151,6 +151,9 @@ int Utils::MACThenDecrypt(const uint8_t* shared_secret, uint8_t* dest, const uin
   int cipher_len = src_len - CIPHER_MAC_SIZE;
   if (cipher_len <= 0 || (cipher_len % CIPHER_BLOCK_SIZE) != 0) return 0;
 
+  int enc_len = src_len - CIPHER_MAC_SIZE;
+  if (enc_len % CIPHER_BLOCK_SIZE != 0) return 0;  // reject non-block-aligned ciphertext
+
   uint8_t hmac[CIPHER_MAC_SIZE];
 #ifdef USE_CC310_HW_CRYPTO
   {
@@ -165,12 +168,12 @@ int Utils::MACThenDecrypt(const uint8_t* shared_secret, uint8_t* dest, const uin
   {
     SHA256 sha;
     sha.resetHMAC(shared_secret, PUB_KEY_SIZE);
-    sha.update(src + CIPHER_MAC_SIZE, src_len - CIPHER_MAC_SIZE);
+    sha.update(src + CIPHER_MAC_SIZE, enc_len);
     sha.finalizeHMAC(shared_secret, PUB_KEY_SIZE, hmac, CIPHER_MAC_SIZE);
   }
 #endif
   if (memcmp(hmac, src, CIPHER_MAC_SIZE) == 0) {
-    return decrypt(shared_secret, dest, src + CIPHER_MAC_SIZE, src_len - CIPHER_MAC_SIZE);
+    return decrypt(shared_secret, dest, src + CIPHER_MAC_SIZE, enc_len);
   }
   return 0; // invalid HMAC
 }
