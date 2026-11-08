@@ -2,6 +2,7 @@
 #include "RTClib.h"
 #include <Melopero_RV3028.h>
 #include "RTC_RX8130CE.h"
+#include <helpers/ClockSyncUtils.h>
 
 static RTC_DS3231 rtc_3231;
 static bool ds3231_success = false;
@@ -51,6 +52,13 @@ void AutoDiscoverRTCClock::begin(TwoWire& wire) {
     rtc_8130.begin(&wire);
     rtc_8130_success = true;
     MESH_DEBUG_PRINTLN("RX8130CE: Initialized");
+  }
+
+  if (ds3231_success || rv3028_success || rtc_8563_success || rtc_8130_success) {
+    uint32_t t = getCurrentTime();
+    if (mesh::clockSyncEstimateInBounds(t) && !mesh::clockLooksUnset(t)) {
+      markAuthoritative();
+    }
   }
 }
 

@@ -371,6 +371,7 @@ public :
             if (_time_sync_needed && clockSampleReady()) {
                 if (_clock != NULL) {
                     _clock->setCurrentTime(_clock_sample);
+                    _clock->markAuthoritative();
                     _time_sync_needed = false;
                     _last_time_sync = millis();
                 }

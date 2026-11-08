@@ -117,10 +117,20 @@ public:
 */
 class RTCClock {
   uint32_t last_unique;
+  bool _authoritative;
+  bool _has_valid_time;
 protected:
-  RTCClock() { last_unique = 0; }
+  RTCClock() : last_unique(0), _authoritative(false), _has_valid_time(false) {}
 
 public:
+  // GPS, NTP, manual `time`/`clock sync`, and a hardware RTC at boot.
+  void markAuthoritative() { _authoritative = true; _has_valid_time = true; }
+  bool isAuthoritative() const { return _authoritative; }
+  // Mesh consensus sets this without becoming authoritative, so GPS/NTP/manual
+  // can still replace the fallback and it will not be applied twice.
+  void markValid() { _has_valid_time = true; }
+  bool hasValidTime() const { return _has_valid_time; }
+
   /**
    * \returns  the current time. in UNIX epoch seconds.
   */
