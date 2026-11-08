@@ -40,6 +40,9 @@
 #ifndef TXT_ACK_DELAY
   #define TXT_ACK_DELAY 200
 #endif
+#ifndef DIRECT_RETRY_ECHO_MIN_MS
+  #define DIRECT_RETRY_ECHO_MIN_MS 200
+#endif
 
 #define FIRMWARE_VER_LEVEL       2
 
@@ -59,6 +62,20 @@
 #define CLI_REPLY_DELAY_MILLIS      600
 
 #define LAZY_CONTACTS_WRITE_DELAY    5000
+
+const NeighbourInfo* MyMesh::findNeighbourByHash(const uint8_t* hash, uint8_t hash_len) const {
+#if MAX_NEIGHBOURS
+  for (int i = 0; i < MAX_NEIGHBOURS; i++) {
+    if (neighbours[i].heard_timestamp > 0 && neighbours[i].id.isHashMatch(hash, hash_len)) {
+      return &neighbours[i];
+    }
+  }
+#else
+  (void)hash;
+  (void)hash_len;
+#endif
+  return NULL;
+}
 
 void MyMesh::putNeighbour(const mesh::Identity &id, uint32_t timestamp, float snr) {
 #if MAX_NEIGHBOURS // check if neighbours enabled
@@ -569,6 +586,18 @@ uint32_t MyMesh::getRetransmitDelay(const mesh::Packet *packet) {
 uint32_t MyMesh::getDirectRetransmitDelay(const mesh::Packet *packet) {
   uint32_t t = (_radio->getEstAirtimeFor(packet->getPathByteLen() + packet->payload_len + 2) * _prefs.direct_tx_delay_factor);
   return getRNG()->nextInt(0, 5*t + 1);
+}
+bool MyMesh::allowDirectRetry(const mesh::Packet* packet, const uint8_t* next_hop_hash, uint8_t next_hop_hash_len) const {
+  (void)packet;
+  if (_prefs.disable_fwd) {
+    return false;
+  }
+  return findNeighbourByHash(next_hop_hash, next_hop_hash_len) != NULL;
+}
+uint32_t MyMesh::getDirectRetryEchoDelay(const mesh::Packet* packet) const {
+  uint32_t air = _radio->getEstAirtimeFor(packet->getRawLength());
+  uint32_t wait = air * 4;
+  return wait > DIRECT_RETRY_ECHO_MIN_MS ? wait : DIRECT_RETRY_ECHO_MIN_MS;
 }
 
 mesh::DispatcherAction MyMesh::onRecvPacket(mesh::Packet* pkt) {

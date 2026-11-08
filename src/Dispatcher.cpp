@@ -116,6 +116,7 @@ void Dispatcher::loop() {
 
       _radio->onSendFinished();
       logTx(outbound, 2 + outbound->getPathByteLen() + outbound->payload_len);
+      onSendComplete(outbound);
       if (outbound->isRouteFlood()) {
         n_sent_flood++;
       } else {
@@ -128,6 +129,7 @@ void Dispatcher::loop() {
 
       _radio->onSendFinished();
       logTxFail(outbound, 2 + outbound->getPathByteLen() + outbound->payload_len);
+      onSendFail(outbound);
 
       releasePacket(outbound);  // return to pool
       outbound = NULL;

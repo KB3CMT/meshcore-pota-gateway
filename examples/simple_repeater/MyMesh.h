@@ -115,6 +115,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   ESPNowBridge bridge;
 #endif
 
+  const NeighbourInfo* findNeighbourByHash(const uint8_t* hash, uint8_t hash_len) const;
   void putNeighbour(const mesh::Identity& id, uint32_t timestamp, float snr);
   uint8_t handleLoginReq(const mesh::Identity& sender, const uint8_t* secret, uint32_t sender_timestamp, const uint8_t* data, bool is_flood);
   uint8_t handleAnonRegionsReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data, size_t data_len);
@@ -142,6 +143,8 @@ protected:
 
   uint32_t getRetransmitDelay(const mesh::Packet* packet) override;
   uint32_t getDirectRetransmitDelay(const mesh::Packet* packet) override;
+  bool allowDirectRetry(const mesh::Packet* packet, const uint8_t* next_hop_hash, uint8_t next_hop_hash_len) const override;
+  uint32_t getDirectRetryEchoDelay(const mesh::Packet* packet) const override;
 
   int getInterferenceThreshold() const override {
     return _prefs.interference_threshold;
