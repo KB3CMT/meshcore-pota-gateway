@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Dispatcher.h>
+#include <helpers/MeshClockFallback.h>
 
 namespace mesh {
 
@@ -28,6 +29,7 @@ class Mesh : public Dispatcher {
   RTCClock* _rtc;
   RNG* _rng;
   MeshTables* _tables;
+  MeshClockFallback _clock_fallback;
 
   void removeSelfFromPath(Packet* packet);
   void routeDirectRecvAcks(Packet* packet, uint32_t delay_millis);
