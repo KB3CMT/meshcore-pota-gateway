@@ -1,5 +1,6 @@
 #if defined(NRF52_PLATFORM)
 #include "NRF52Board.h"
+#include "NRF52VoltageRules.h"
 #include <target.h>
 
 #include <bluefruit.h>
@@ -31,6 +32,28 @@ void NRF52Board::begin() {
     nRFCrypto.begin();
   #endif
 }
+
+#ifdef LIFEPO4_VOLTAGE_CUTOFF
+void NRF52Board::loop() {
+  // Running cutoff: 3 consecutive in-range readings below 2.7 V, 30 s apart,
+  // skipped during TX sag (companion #3462 / isBattReadSafe).
+  static uint32_t last_check = 0;
+  static uint8_t low_count = 0;
+  const uint32_t now = millis();
+  if (now - last_check < 30000UL) return;
+  if (!isBattReadSafe(now)) return;
+  last_check = now;
+  if (isExternalPowered()) {
+    low_count = 0;
+    return;
+  }
+  low_count = mesh::power::nextLowVoltageCount(
+      low_count, getBattMilliVolts(), LIFEPO4_CUTOFF_MV, false);
+  if (low_count >= mesh::power::LOW_VOLTAGE_CONFIRM_READINGS) {
+    initiateShutdown(SHUTDOWN_REASON_LOW_VOLTAGE);
+  }
+}
+#endif
 
 #ifdef NRF52_POWER_MANAGEMENT
 #include "nrf.h"
@@ -111,6 +134,31 @@ const char* NRF52Board::getShutdownReasonString(uint8_t reason) {
 bool NRF52Board::checkBootVoltage(const PowerMgtConfig* config) {
   pwrmgtInit();
 
+#ifdef LIFEPO4_VOLTAGE_CUTOFF
+  // LiFePO4: median of 3 ADC reads, 2.9 V boot lock. Ignores the board's
+  // compiled 3.3 V Li-ion default so LFP packs can boot (3984b872).
+  (void)config;
+  uint16_t samples[3];
+  samples[0] = getBattMilliVolts();
+  delay(20);
+  samples[1] = getBattMilliVolts();
+  delay(20);
+  samples[2] = getBattMilliVolts();
+  boot_voltage_mv = mesh::power::medianVoltage(samples[0], samples[1], samples[2]);
+  const uint16_t threshold = LIFEPO4_BOOTLOCK_MV;
+  if (isExternalPowered()) {
+    MESH_DEBUG_PRINTLN("PWRMGT: Boot check skipped (external power)");
+    return true;
+  }
+  MESH_DEBUG_PRINTLN("PWRMGT: Boot voltage = %u mV (threshold = %u mV)",
+      boot_voltage_mv, threshold);
+  if (mesh::power::shouldBootLock(boot_voltage_mv, threshold, false)) {
+    MESH_DEBUG_PRINTLN("PWRMGT: Boot voltage too low - entering protective shutdown");
+    initiateShutdown(SHUTDOWN_REASON_BOOT_PROTECT);
+    return false;
+  }
+  return true;
+#else
   // Read boot voltage
   boot_voltage_mv = getBattMilliVolts();
   
@@ -143,6 +191,7 @@ bool NRF52Board::checkBootVoltage(const PowerMgtConfig* config) {
   }
 
   return true;
+#endif
 }
 
 void NRF52Board::initiateShutdown(uint8_t reason) {

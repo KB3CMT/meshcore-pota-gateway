@@ -2,6 +2,7 @@
 
 #include <Dispatcher.h>
 #include <helpers/DirectRetryUtils.h>
+#include <helpers/MeshClockFallback.h>
 
 namespace mesh {
 
@@ -48,6 +49,7 @@ class Mesh : public Dispatcher {
   RNG* _rng;
   MeshTables* _tables;
   DirectRetryEntry _direct_retries[MAX_DIRECT_RETRY_SLOTS];
+  MeshClockFallback _clock_fallback;
 
   void removeSelfFromPath(Packet* packet);
   void routeDirectRecvAcks(Packet* packet, uint32_t delay_millis);

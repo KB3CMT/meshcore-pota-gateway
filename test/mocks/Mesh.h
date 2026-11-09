@@ -16,10 +16,16 @@ public:
 };
 
 class RTCClock {
+  bool _authoritative = false;
+  bool _has_valid_time = false;
 public:
   virtual ~RTCClock() = default;
   virtual uint32_t getCurrentTime() = 0;
   virtual void setCurrentTime(uint32_t time) = 0;
+  void markAuthoritative() { _authoritative = true; _has_valid_time = true; }
+  bool isAuthoritative() const { return _authoritative; }
+  void markValid() { _has_valid_time = true; }
+  bool hasValidTime() const { return _has_valid_time; }
 };
 
 class MainBoard {

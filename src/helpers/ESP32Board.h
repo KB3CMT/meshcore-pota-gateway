@@ -229,6 +229,7 @@ public:
   void begin() {
     esp_reset_reason_t reason = esp_reset_reason();
     if (reason == ESP_RST_DEEPSLEEP) {
+      markAuthoritative();  // system time survived; mesh consensus must not rewind it
       return;  // ESP-IDF preserves system time across deep sleep
     }
     // All other resets (power-on, crash, WDT, brownout) lose system time.
@@ -236,6 +237,7 @@ public:
     struct timeval tv;
     if (_rtc_backup_magic == RTC_BACKUP_MAGIC && _rtc_backup_time > RTC_TIME_MIN) {
       tv.tv_sec = _rtc_backup_time;
+      markAuthoritative();
     } else {
       tv.tv_sec = RTC_TIME_MIN;
     }

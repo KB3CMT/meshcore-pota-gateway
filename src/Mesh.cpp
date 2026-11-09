@@ -16,6 +16,7 @@ void Mesh::begin() {
     _direct_retries[i].active = false;
   }
   Dispatcher::begin();
+  _clock_fallback.begin(_rtc);
 }
 
 void Mesh::loop() {
@@ -338,6 +339,7 @@ DispatcherAction Mesh::onRecvPacket(Packet* pkt) {
         }
         if (is_ok) {
           MESH_DEBUG_PRINTLN("%s Mesh::onRecvPacket(): valid advertisement received!", getLogDateTime());
+          _clock_fallback.observeAdvert(id.pub_key, timestamp);
           onAdvertRecv(pkt, id, timestamp, app_data, app_data_len);
           action = routeRecvPacket(pkt);
         } else {
