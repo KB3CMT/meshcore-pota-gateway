@@ -6,6 +6,22 @@
 
 #if defined(NRF52_PLATFORM)
 
+// Opt-in LiFePO4 low-voltage cutoff (mikecarper/MeshCore 11d64b3db).
+// Implies the existing nRF52 power-management path, but only when this
+// flag is set. Default builds keep NRF52_POWER_MANAGEMENT off so Li-ion
+// and other chemistries are unchanged (3984b872 / #1914).
+#ifdef LIFEPO4_VOLTAGE_CUTOFF
+#ifndef NRF52_POWER_MANAGEMENT
+#define NRF52_POWER_MANAGEMENT 1
+#endif
+#ifndef LIFEPO4_BOOTLOCK_MV
+#define LIFEPO4_BOOTLOCK_MV 2900
+#endif
+#ifndef LIFEPO4_CUTOFF_MV
+#define LIFEPO4_CUTOFF_MV 2700
+#endif
+#endif
+
 #ifdef NRF52_POWER_MANAGEMENT
 // Shutdown Reason Codes (stored in GPREGRET before SYSTEMOFF)
 #define SHUTDOWN_REASON_NONE          0x00
@@ -49,6 +65,9 @@ protected:
 public:
   NRF52Board(char *otaname) : ota_name(otaname) {}
   virtual void begin();
+#ifdef LIFEPO4_VOLTAGE_CUTOFF
+  virtual void loop() override;
+#endif
   virtual uint8_t getStartupReason() const override { return startup_reason; }
   virtual float getMCUTemperature() override;
   virtual void reboot() override { NVIC_SystemReset(); }
