@@ -49,7 +49,7 @@ SPOT W1AW K-1234 14285 CW
 
 The callsign is required. `SPOT US-1234 14.285 SSB` is not a valid line.
 
-WWFF and SOTA use the same room, and they POST to [parksnpeaks.org](https://parksnpeaks.org/api/) only after the gateway host has saved a valid ParksnPeaks user and API key:
+WWFF and SOTA use the same room, and they POST to `https://parksnpeaks.org/api/SPOT` only after the gateway host has saved a valid ParksnPeaks user and API key:
 
 ```text
 SPOT WWFF W1AW KFF-0001 7.144 SSB CQ WWFF
@@ -117,7 +117,7 @@ pio run -e Xiao_S3_WIO_room_server_pota -t upload -t monitor
 
 Compile-default radio settings in upstream MeshCore are often EU (`869.618` MHz, bandwidth `62.5`, spreading factor `8`). Copy `get radio` from a working node on your mesh, `set radio` those values, and reboot, or the room will not be heard.
 
-Before the first `advert`: set the name, change both passwords, confirm repeat is off. If the board has no saved Wi-Fi, it opens the setup AP `MeshCore-POTA-Gateway` at `http://192.168.4.1`. A phone hotspot is enough; leave cellular data on.
+Before the first `advert`: set the name, change both passwords, confirm repeat is off. If the board has no saved Wi-Fi, it opens the setup AP `MeshCore-POTA-Gateway` at `http://192.168.4.1`. A phone hotspot is enough; leave cellular data on. After STA is up, the ParksnPeaks key is set at `http://<dhcp-ip>/` using the admin password; the stored key is never shown. Spots POST over CA-validated HTTPS.
 
 USB dry run, no second radio:
 
