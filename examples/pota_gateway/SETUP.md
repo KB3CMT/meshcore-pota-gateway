@@ -80,8 +80,9 @@ Read-only / wrong-password visitors cannot post. Guests with no room password ar
 
 The radio comes up first. Wi-Fi is non-blocking.
 
-- If saved credentials work, serial shows `[POTA] Wi-Fi <ip>` then `[PNP] portal http://<ip>/`. The Heltec OLED shows that DHCP address (and `192.168.4.1` while the first-setup AP is up). Open **`http://<that-ip>/`** on the same Wi-Fi (port 80) to set the ParksnPeaks user ID + API key. The page shows whether a key is **set**, never the key itself, and does **not** change Wi-Fi, so it will not hang the radio or USB serial. WWFF/SOTA spotting stays **off** until both look valid. Enter `OFF` in the key field to disable. A blank key on save keeps the stored key.
-- If not, after about **25 seconds** the Heltec opens AP **`MeshCore-POTA-Gateway`**. Join it, open **`http://192.168.4.1`**, pick the field hotspot (phone tethering is fine), optionally fill ParksnPeaks, save, then leave that AP so the Heltec can join the hotspot. The SoftAP stops when STA is up. Cellular data on the phone must stay on. TLS connects by hostname `api.pota.app` (CloudFront SNI). Connecting by raw IP fails.
+- If saved credentials work, serial shows `[POTA] Wi-Fi <ip>` then `[PNP] portal http://<ip>/`. The Heltec OLED shows that DHCP address (and `192.168.4.1` while the first-setup AP is up). Open **`http://<that-ip>/`** on the same Wi-Fi (port 80) to set the ParksnPeaks user ID + API key. **Saving on this LAN page requires the node's admin password** (the serial `password` command; default `password`). The page shows whether a key is **set**, never the key itself, and does **not** change Wi-Fi, so it will not hang the radio or USB serial. WWFF/SOTA spotting stays **off** until both look valid. Enter `OFF` in the key field to disable. A blank key on save keeps the stored key.
+- If not, after about **25 seconds** the Heltec opens AP **`MeshCore-POTA-Gateway`**. Join it, open **`http://192.168.4.1`**, pick the field hotspot (phone tethering is fine), optionally fill ParksnPeaks, save, then leave that AP so the Heltec can join the hotspot. The SoftAP stops when STA is up. The first-setup AP does not ask for the admin password. Cellular data on the phone must stay on.
+- Spots POST over HTTPS with CA-validated TLS: `https://api.pota.app/spot` (Amazon Root CA 1) and `https://parksnpeaks.org/api/SPOT` (ISRG Root X1/X2). Connect by hostname so CloudFront/Let's Encrypt get the right SNI; a raw IP fails. NTP starts when STA is up; a spot is postponed (and retried) if the clock is still the boot seed. Change the default admin password before the room is on a shared LAN.
 - `pota` on serial reports `WiFi <ip> q=0 busy=0 pnp=on|off`, or `portal 192.168.4.1`, or `WiFi down`.
 
 Spots queue until Wi-Fi is up (up to 6 waiting: a newer `SPOT` drops the oldest only when the queue is full, with a serial log line). HTTPS does not run inside the LoRa receive callback.
@@ -130,7 +131,7 @@ The gateway drops a line **before** HTTPS when any of these fail. The text still
 | Whole gateway | 20 queued spots in any hour (POTA, WWFF, and SOTA share this cap) |
 | Block list | Admin `pota block CALL`. `W1AW` also matches `W1AW/P` and `KH6/W1AW`. Up to 16 callsigns, kept in flash across reboot. USB serial or an admin login; the open Wi-Fi page cannot edit it. |
 
-POTA always POSTs to pota.app. WWFF/SOTA POST to [parksnpeaks.org](https://parksnpeaks.org/api/) **only if** a valid PnP user + API key is saved on the portal (`pota` shows `pnp=on`). Get the key from your ParksnPeaks user options page. No key → those lines stay in the room BBS and serial says skipped.
+POTA always POSTs to `https://api.pota.app/spot`. WWFF/SOTA POST to `https://parksnpeaks.org/api/SPOT` **only if** a valid PnP user + API key is saved on the portal (`pota` shows `pnp=on`). Get the key from your ParksnPeaks user options page. No key → those lines stay in the room BBS and serial says skipped.
 
 Serial on the gateway should show:
 
@@ -206,7 +207,9 @@ There is no mesh-wide election and no “first node to hear it wins.” Encrypti
 | Post appears in the room but no `[POTA] Queued` | Line is not `SPOT …` / `#pota SPOT …`; guest/read-only cannot post |
 | `[POTA] Queued` then `waiting for Wi-Fi` | Portal or hotspot; run `pota`; join `MeshCore-POTA-Gateway` |
 | HTTP `401` / `403` | `api.pota.app/spot` rejected the post (session/JWT), or PnP API key/user is wrong |
-| `[PNP] skipped` / not queued | No valid ParksnPeaks key; open `http://<sta-ip>/` (OLED shows the DHCP address) |
+| `[PNP] skipped` / not queued | No valid ParksnPeaks key; open `http://<sta-ip>/` (OLED shows the DHCP address) and save with the admin password |
+| `[PNP] config rejected (admin password)` | LAN save without the serial/CLI admin password |
+| `[POTA] TLS postponed — clock` | NTP has not set time yet; the spot retries. Check that the hotspot allows UDP/123 |
 | `[POTA] rejected shape` | Call, reference, frequency, or mode failed the shape check |
 | `[POTA] rejected duplicate` | Same spot inside 5 minutes |
 | `[POTA] rejected call-rate` | That activator already has 3 spots in 10 minutes |

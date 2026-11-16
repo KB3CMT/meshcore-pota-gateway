@@ -94,7 +94,7 @@ void setup() {
   the_mesh.begin(fs);
 
 #ifdef WITH_POTA_GATEWAY
-  PotaSpotter::initWiFi();
+  PotaSpotter::initWiFi(the_mesh.getNodePrefs()->password);
 #endif
 
 #ifdef DISPLAY_CLASS

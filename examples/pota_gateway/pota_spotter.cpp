@@ -11,12 +11,14 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
 #include "lwip/dns.h"
 #include "lwip/ip_addr.h"
 #include "pota_guard.h"
+#include "pota_tls_certs.h"
 
 #define POTA_HOST "api.pota.app"
 #define POTA_PATH "/spot"
@@ -51,8 +53,6 @@ static bool portalStarted = false;
 static bool staOnline = false;
 static bool pnpHttpUp = false;
 static volatile bool httpBusy = false;
-static IPAddress cachedPotaIp;
-static unsigned long cachedPotaAt = 0;
 
 static char pnpUser[16];
 static char pnpKey[48];
@@ -60,6 +60,11 @@ static WiFiManagerParameter* wmPnpUser = nullptr;
 static WiFiManagerParameter* wmPnpKey = nullptr;
 static WebServer pnpHttp(80);
 static PotaGuard spotGuard;
+static const char* adminPassword = nullptr;
+static bool ntpStarted = false;
+
+/* ESP32RTCClock seeds 2026-03-01; current ACM/LE leaves start later. */
+#define POTA_TLS_MIN_EPOCH 1792454400L  /* 2026-10-20 00:00:00 UTC */
 
 static void logf(const char* fmt, ...) {
     char buf[192];
@@ -100,65 +105,47 @@ static void tearDownSoftAp() {
     portalStarted = false;
 }
 
-static bool parseDnsA(const char* body, IPAddress& out) {
-    const char* ans = strstr(body, "\"Answer\"");
-    if (!ans) ans = body;
-    const char* d = strstr(ans, "\"data\":\"");
-    if (!d) return false;
-    int a, b, c, e;
-    if (sscanf(d + 8, "%d.%d.%d.%d", &a, &b, &c, &e) != 4) return false;
-    out = IPAddress((uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)e);
-    return (uint32_t)out != 0;
+/*
+ * DNS: WiFiClientSecure.connect(hostname) uses lwIP / STA DNS only.
+ * The old Google HTTP-DNS fallback (8.8.8.8:80) is gone — it was spoofable
+ * and unused by the POST path, which already connected by hostname for SNI.
+ * A poisoned A record now fails TLS hostname/CA checks instead of posting.
+ */
+
+static void startNtp() {
+    if (ntpStarted) return;
+    ntpStarted = true;
+    configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
+    logf("[POTA] NTP started (TLS needs a valid clock)");
 }
 
-static bool httpDnsAt(IPAddress server, const char* hostHdr, IPAddress& out) {
-    WiFiClient client;
-    client.setTimeout(5000);
-    if (!client.connect(server, 80)) {
-        logf("[POTA] TCP %s:80 failed\n", server.toString().c_str());
-        return false;
-    }
-    client.printf("GET /resolve?name=%s&type=A HTTP/1.0\r\nHost: %s\r\nConnection: close\r\n\r\n",
-                  POTA_HOST, hostHdr);
-    unsigned long start = millis();
-    char buf[896];
-    size_t n = 0;
-    while ((millis() - start) < 6000 && n + 1 < sizeof(buf)) {
-        while (client.available() && n + 1 < sizeof(buf)) buf[n++] = (char)client.read();
-        if (!client.connected() && !client.available()) break;
-        delay(5);
-    }
-    buf[n] = 0;
-    client.stop();
-    return parseDnsA(buf, out);
+static bool clockOkForTls() {
+    return time(nullptr) >= (time_t)POTA_TLS_MIN_EPOCH;
 }
 
-static bool resolvePotaHost(IPAddress& ip) {
-    if (cachedPotaAt && (millis() - cachedPotaAt) < 300000ul && (uint32_t)cachedPotaIp) {
-        ip = cachedPotaIp;
-        return true;
+static bool waitForTlsTime() {
+    startNtp();
+    if (clockOkForTls()) return true;
+    TickType_t start = xTaskGetTickCount();
+    while ((xTaskGetTickCount() - start) < pdMS_TO_TICKS(8000)) {
+        vTaskDelay(pdMS_TO_TICKS(250));
+        if (clockOkForTls()) return true;
     }
-    bindStaDns();
-    if (WiFi.hostByName(POTA_HOST, ip) == 1 && (uint32_t)ip != 0) {
-        cachedPotaIp = ip;
-        cachedPotaAt = millis();
-        logf("[POTA] DNS %s -> %s\n", POTA_HOST, ip.toString().c_str());
-        return true;
-    }
-    logf("[POTA] hostByName failed (ip=%s gw=%s dns=%s rssi=%d)\n",
-                  WiFi.localIP().toString().c_str(),
-                  WiFi.gatewayIP().toString().c_str(),
-                  WiFi.dnsIP().toString().c_str(),
-                  WiFi.RSSI());
-    if (httpDnsAt(IPAddress(8, 8, 8, 8), "dns.google", ip) ||
-        httpDnsAt(IPAddress(8, 8, 4, 4), "dns.google", ip)) {
-        cachedPotaIp = ip;
-        cachedPotaAt = millis();
-        logf("[POTA] Google HTTP DNS %s -> %s\n", POTA_HOST, ip.toString().c_str());
-        return true;
-    }
-    logf("[POTA] no path to the internet (hotspot not routing UDP/TCP DNS)");
+    logf("[POTA] TLS postponed — clock unix=%ld (need NTP)", (long)time(nullptr));
     return false;
+}
+
+static bool adminPwOk(const char* supplied) {
+    const char* expect = adminPassword ? adminPassword : "";
+    size_t n = strlen(expect);
+    size_t m = supplied ? strlen(supplied) : 0;
+    if (n == 0) return false;
+    unsigned diff = (unsigned)(n ^ m);
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (i < m) ? (unsigned char)supplied[i] : 0;
+        diff |= (unsigned char)expect[i] ^ c;
+    }
+    return diff == 0;
 }
 
 static void copyField(char* dest, size_t destLen, const char* src, size_t srcLen) {
@@ -351,34 +338,54 @@ static void onPortalSave() {
     applyPnpForm(wmPnpUser->getValue(), wmPnpKey->getValue());
 }
 
-static void handlePnpRoot() {
-    char page[1500];
+static void sendPnpPage(int code, const char* err) {
+    char page[2048];
+    char errHtml[160];
+    errHtml[0] = 0;
+    if (err && err[0]) {
+        snprintf(errHtml, sizeof(errHtml), "<p style=color:red>%s</p>", err);
+    }
     String ip = WiFi.localIP().toString();
     snprintf(page, sizeof(page),
              "<!DOCTYPE html><html><head><meta name=viewport content='width=device-width,initial-scale=1'>"
              "<title>MeshCore POTA gateway</title></head><body>"
              "<h1>MeshCore POTA gateway</h1>"
-             "<p>DHCP <b>%s</b><br>POTA: api.pota.app<br>ParksnPeaks: <b>%s</b> user=%s<br>API key: <b>%s</b></p>"
+             "<p>DHCP <b>%s</b><br>POTA: api.pota.app (TLS)<br>ParksnPeaks: <b>%s</b> user=%s<br>API key: <b>%s</b></p>"
+             "%s"
              "<h2>ParksnPeaks API key</h2>"
              "<form method=post autocomplete=off>"
              "<p>User ID<br><input name=user value='%s' maxlength=15></p>"
              "<p>API key (leave blank to keep)<br>"
              "<input name=key type=password maxlength=47 value='' autocomplete=off></p>"
+             "<p>Admin password<br>"
+             "<input name=admin type=password maxlength=15 value='' autocomplete=off></p>"
              "<button type=submit>Save</button>"
              "</form>"
-             "<p>Blank key keeps the stored key. Type OFF to disable. This page does not change Wi-Fi "
-             "and never shows the stored key.</p>"
+             "<p>Saves need this node's admin password (serial <code>password</code> command). "
+             "Blank key keeps the stored key. Type OFF to disable. The stored key is never shown. "
+             "The first-setup AP at 192.168.4.1 can set the key without this password.</p>"
              "</body></html>",
              ip.c_str(),
              pnpEnabled() ? "ON" : "OFF",
              pnpEnabled() ? pnpUser : "-",
              pnpKeyLooksValid(pnpKey) ? "set" : "not set",
+             errHtml,
              pnpUser[0] ? pnpUser : "");
-    pnpHttp.send(200, "text/html", page);
-    logf("[PNP] config page served http://%s/", ip.c_str());
+    pnpHttp.send(code, "text/html", page);
+}
+
+static void handlePnpRoot() {
+    sendPnpPage(200, nullptr);
+    logf("[PNP] config page served http://%s/", WiFi.localIP().toString().c_str());
 }
 
 static void handlePnpSave() {
+    String admin = pnpHttp.arg("admin");
+    if (!adminPwOk(admin.c_str())) {
+        logf("[PNP] config rejected (admin password)");
+        sendPnpPage(403, "Admin password required (same as serial/CLI password).");
+        return;
+    }
     String user = pnpHttp.arg("user");
     String key = pnpHttp.arg("key");
     logf("[PNP] config form submitted user=%s key=%s",
@@ -441,6 +448,33 @@ static int readHttpCode(Client& s) {
     return code;
 }
 
+static int httpsPostJson(const char* host, const char* path, const char* json,
+                         const char* ca, const char* tag) {
+    if (!waitForTlsTime()) return -1;
+
+    WiFiClientSecure tls;
+    tls.setCACert(ca);
+    tls.setTimeout(8000);
+    /* Hostname connect so SNI matches (CloudFront rejects a raw IP). */
+    if (!tls.connect(host, 443)) {
+        logf("[%s] TLS %s:443 failed", tag, host);
+        return -1;
+    }
+
+    int bodyLen = (int)strlen(json);
+    tls.printf("POST %s HTTP/1.1\r\n", path);
+    tls.printf("Host: %s\r\n", host);
+    tls.print("User-Agent: MeshCore-POTA-Gateway/v1.18.0+pota\r\n");
+    tls.print("Content-Type: application/json\r\n");
+    tls.printf("Content-Length: %d\r\n", bodyLen);
+    tls.print("Connection: close\r\n\r\n");
+    tls.write((const uint8_t*)json, (size_t)bodyLen);
+
+    int code = readHttpCode(tls);
+    tls.stop();
+    return code;
+}
+
 static int postPota(const Pending& spot) {
     char activator[24], park[24], freq[24], mode[20], spotter[24], comments[120];
     jsonEscape(spot.activator, activator, sizeof(activator));
@@ -462,29 +496,7 @@ static int postPota(const Pending& spot) {
     }
 
     logf("[POTA] POST %s\n", json);
-
-    WiFiClientSecure tls;
-    tls.setInsecure();
-    tls.setTimeout(8000);
-    // Must connect by hostname so CloudFront gets SNI api.pota.app (IP connect = fatal alert).
-    if (!tls.connect(POTA_HOST, 443)) {
-        logf("[POTA] TLS api.pota.app:443 failed");
-        cachedPotaAt = 0;
-        return -1;
-    }
-
-    int bodyLen = (int)strlen(json);
-    tls.printf("POST %s HTTP/1.1\r\n", POTA_PATH);
-    tls.print("Host: " POTA_HOST "\r\n");
-    tls.print("User-Agent: MeshCore-POTA-Gateway/v1.18.0+pota\r\n");
-    tls.print("Content-Type: application/json\r\n");
-    tls.printf("Content-Length: %d\r\n", bodyLen);
-    tls.print("Connection: close\r\n\r\n");
-    tls.write((const uint8_t*)json, (size_t)bodyLen);
-
-    int code = readHttpCode(tls);
-    tls.stop();
-    return code;
+    return httpsPostJson(POTA_HOST, POTA_PATH, json, POTA_APP_ROOTS, "POTA");
 }
 
 static int postPnp(const Pending& spot) {
@@ -513,25 +525,9 @@ static int postPnp(const Pending& spot) {
     }
 
     logf("[PNP] POST %s %s %s %s %s\n", actClass, spot.activator, spot.park, mhz, spot.mode);
-
-    WiFiClient http;
-    http.setTimeout(8000);
-    if (!http.connect(PNP_HOST, 80)) {
-        logf("[PNP] TCP parksnpeaks.org:80 failed");
-        return -1;
-    }
-
-    int bodyLen = (int)strlen(json);
-    http.printf("POST %s HTTP/1.1\r\n", PNP_PATH);
-    http.print("Host: " PNP_HOST "\r\n");
-    http.print("User-Agent: MeshCore-POTA-Gateway/v1.18.0+pota\r\n");
-    http.print("Content-Type: application/json\r\n");
-    http.printf("Content-Length: %d\r\n", bodyLen);
-    http.print("Connection: close\r\n\r\n");
-    http.write((const uint8_t*)json, (size_t)bodyLen);
-
-    int code = readHttpCode(http);
-    http.stop();
+    int code = httpsPostJson(PNP_HOST, PNP_PATH, json, PNP_ROOTS, "PNP");
+    memset(json, 0, sizeof(json));
+    memset(key, 0, sizeof(key));
     return code;
 }
 
@@ -663,11 +659,12 @@ bool PotaSpotter::looksLikeSpot(const char* message) {
     return skipSpotPrefix(message, &after) != nullptr;
 }
 
-void PotaSpotter::initWiFi() {
+void PotaSpotter::initWiFi(const char* adminPw) {
 #if defined(ESP_ARDUINO_VERSION_VAL) && \
     ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
     Serial.setTxTimeoutMs(50);
 #endif
+    adminPassword = adminPw;
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);
     WiFi.persistent(true);
@@ -689,7 +686,7 @@ void PotaSpotter::initWiFi() {
         spotQueue = xQueueCreate(POTA_QUEUE_LEN, sizeof(Pending));
     }
     if (!httpTaskHandle && spotQueue) {
-        xTaskCreatePinnedToCore(httpTask, "potaHttp", 12288, nullptr, 1, &httpTaskHandle, 0);
+        xTaskCreatePinnedToCore(httpTask, "potaHttp", 16384, nullptr, 1, &httpTaskHandle, 0);
     }
 
     logf("[POTA] Wi-Fi STA starting; portal MeshCore-POTA-Gateway if no network in 25s");
@@ -704,6 +701,7 @@ void PotaSpotter::handleLoop() {
         }
         if (!staOnline) {
             bindStaDns();
+            startNtp();
             logf("[POTA] Wi-Fi %s  gw %s  dns %s  rssi %d",
                  WiFi.localIP().toString().c_str(),
                  WiFi.gatewayIP().toString().c_str(),

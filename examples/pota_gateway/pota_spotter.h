@@ -14,8 +14,9 @@
  *   SPOT [POTA|WWFF|SOTA] <CALL> <REF> <FREQ> <MODE> …
  *   #pota / #wwff / #sota SPOT ...
  *
- * WWFF/SOTA POST to parksnpeaks.org only if a valid PnP user+API key
- * was saved on the Wi-Fi portal. POTA always uses api.pota.app.
+ * WWFF/SOTA POST to https://parksnpeaks.org/api/SPOT only if a valid
+ * PnP user+API key was saved on the Wi-Fi portal or LAN page. POTA
+ * always uses https://api.pota.app/spot. Both use CA-validated TLS.
  *
  * Before queueing, drops spots that fail call/ref/freq/mode shape,
  * hit the local block list, repeat inside 5 minutes, exceed 3 spots
@@ -25,7 +26,7 @@
 class PotaSpotter {
 public:
     static bool looksLikeSpot(const char* message);
-    static void initWiFi();
+    static void initWiFi(const char* adminPassword);
     static void handleLoop();
     static bool processMessage(const char* senderCall, const char* message,
                                const uint8_t* nodePubKey = nullptr, unsigned nodePubLen = 0);
