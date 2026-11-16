@@ -1,5 +1,6 @@
 #include "MyMesh.h"
 #include "RoomAuth.h"
+#include <algorithm>
 
 static_assert(static_cast<uint8_t>(room_server::LoginPermission::Guest) == PERM_ACL_GUEST,
               "room login guest permission must match the ACL role");
@@ -186,8 +187,8 @@ int MyMesh::handleRequest(ClientInfo *sender, uint32_t sender_timestamp, uint8_t
     stats.n_recv_direct = getNumRecvDirect();
     stats.err_events = _err_flags;
     stats.last_snr = (int16_t)(radio_driver.getLastSNR() * 4);
-    stats.n_direct_dups = ((SimpleMeshTables *)getTables())->getNumDirectDups();
-    stats.n_flood_dups = ((SimpleMeshTables *)getTables())->getNumFloodDups();
+    stats.n_direct_dups = std::min<uint32_t>(((SimpleMeshTables *)getTables())->getNumDirectDups(), 0xFFFF);
+    stats.n_flood_dups = std::min<uint32_t>(((SimpleMeshTables *)getTables())->getNumFloodDups(), 0xFFFF);
     stats.n_posted = _num_posted;
     stats.n_post_push = _num_post_pushes;
 
@@ -486,7 +487,8 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       mesh::Utils::sha256((uint8_t *)&ack_hash, 4, data, 5 + strlen((char *)&data[5]), client->id.pub_key,
                           PUB_KEY_SIZE);
 
-      uint8_t temp[166];
+      // 5-byte datagram header + 3-byte reflected CLI prefix + 160-byte reply text + NUL
+      uint8_t temp[169];
       bool send_ack;
       if (flags == TXT_TYPE_CLI_DATA || flags == TXT_TYPE_CLI_COMMAND) {
         if (client->isAdmin()) {
